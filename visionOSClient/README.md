@@ -73,7 +73,8 @@ The host changes are part of this contribution:
   or windowless ones. Older hosts fall back to the selectable-window inventory.
 - The catalog conservatively admits offscreen windows only with known visible,
   nonminimized state and an unambiguous accessibility match. Explicit app launch
-  can restore a minimized window or fall back to Desktop for a windowless app.
+  can restore a minimized window or reopen a running app, retaining a bounded
+  selection intent while its window appears.
 - `WindowList.editableFocus = 1` advertises optional kind 33 click confirmation.
   The visionOS client requests this only after a matching delivered click; a
   positive, current reply may open the keyboard. The host reads accessibility
@@ -128,7 +129,7 @@ with both released and updated hosts. No exhaustive matrix of these combinations
 has been completed, and no public visionOS release is claimed here.
 
 
-### Spatial windows and toolbar (0.17 candidate)
+### Spatial windows and toolbar (0.19 candidate)
 
 Each “Open as own window” scene owns the full Sill interface and a separate client. A scene value
 contains only a random UUID; its paired-host seed remains in memory for at most 60 seconds. A
@@ -159,25 +160,27 @@ On visionOS 2–25, the persistence API is unavailable: gaze reveal has the one-
 and tapping the pill still keeps it visible until remote control. These are supported-system
 behaviors awaiting real-headset acceptance, not a claim of tracked gaze or infinite persistence.
 
-The left toolbar is a native leading ornament, so its controls remain interactive outside the
-streamed window boundary. Its height equals the horizontal toolbar's offered width; the preview
-strip receives the space remaining after fixed controls. Its window actions use a native popover
-inside the ornament rather than an in-window anchor overlay. Top controls stay in layout, with
-194 points of scene chrome including the glance target and stream padding. The left ornament
-reserves only the stream's 16-point padding. Sidebar text size uses a native popover. The guided
-tour temporarily uses the top arrangement so its spotlight and cards share the scene coordinate
-space; completing or dismissing it restores the saved left-side preference.
+Both toolbar positions are native ornaments outside the streamed scene. The left toolbar's
+height equals the horizontal toolbar's offered width, and its preview strip receives the space
+remaining after fixed controls. Both positions use native popovers for window actions and text
+size. The guided tour temporarily uses an inline top toolbar so its spotlight and cards share
+the scene coordinate space; this may letterbox during the tour. Completing or dismissing it
+restores the saved ornament arrangement without changing the source aspect lock.
 
 The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
 only its own UIWindowScene and requests a bounded preferred size once per connected Mac-window
 selection. Mac-window sizing freezes the catalog's point size before sending the source request;
 a secondary scene carries its parent's pre-launch snapshot through the opaque in-memory seed. The first Desktop after connecting gets a comfortable 1200 × 800 point default; later Desktop
 picks keep the current native size because the protocol has no source-bound Desktop dimensions.
-It never reuses a previous window's encoded size. Later video/catalog changes and manual scene resizing do not
-retrigger fitting. Tiny and
-extreme-aspect sources can have letterboxing within the system's minimum window size. A new
-connection/source selection starts a new sizing decision. Geometry requests remain system
-preferences and can be declined.
+Selected-window scenes request uniform resizing with that source aspect, and the picture fills
+the scene without fixed padding. Minimum, preferred and maximum sizes are scaled uniformly,
+so resizing does not introduce a different picture aspect. Login, Desktop and selections still
+awaiting valid dimensions explicitly allow freeform resizing. Later video/catalog changes do
+not change the native ratio or create a viewport-to-scene sizing loop; selecting another source
+sets its ratio. Geometry requests remain system preferences and can be declined or constrained,
+especially for extreme aspect ratios. Mac apps with their own window-size limits or a second
+viewer of an already fitted window can still produce a source frame with different dimensions;
+the renderer preserves the full image without cropping or stretching.
 
 Debug visual checks can use `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1` with the existing layout harness. The pure sizing check is
 `Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input

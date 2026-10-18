@@ -6,7 +6,6 @@ import StreamProtocol
 /// It never enumerates UIApplication windows or applies changes to a sibling scene.
 struct VisionWindowGeometry: UIViewRepresentable {
     @ObservedObject var client: StreamClient
-    @SceneStorage("Sill.spatialToolbarPosition") private var toolbarPosition = "top"
 
     func makeUIView(context: Context) -> VisionWindowGeometryView {
         VisionWindowGeometryView()
@@ -17,8 +16,7 @@ struct VisionWindowGeometry: UIViewRepresentable {
         // Exact-size mock/live harness frames are visual test fixtures, not scene-size requests.
         if LayoutHarness.Spec.fromLaunchArguments != nil { return }
         #endif
-        let toolbar: VisionWindowSizePolicy.Toolbar = toolbarPosition == "left" ? .left : .top
-        view.update(client: client, toolbar: toolbar)
+        view.update(client: client)
     }
 
     static func dismantleUIView(_ view: VisionWindowGeometryView, coordinator: ()) {
@@ -33,8 +31,8 @@ final class VisionWindowGeometryView: UIView {
     }
     private weak var client: StreamClient?
     private weak var owningScene: UIWindowScene?
-    private var toolbar = VisionWindowSizePolicy.Toolbar.top
     private var applied: Token?
+    private var waitingForDimensions: Token?
     private var hasSizedConnectedSource = false
     private var disconnected = false
     private var observers: [NSObjectProtocol] = []
@@ -74,9 +72,8 @@ final class VisionWindowGeometryView: UIView {
         applySize()
     }
 
-    func update(client: StreamClient, toolbar: VisionWindowSizePolicy.Toolbar) {
+    func update(client: StreamClient) {
         self.client = client
-        self.toolbar = toolbar
         if let scene = owningScene { VisionSceneSessionLifecycle.attach(client: client, to: scene) }
         applySize()
     }
@@ -90,16 +87,15 @@ final class VisionWindowGeometryView: UIView {
             hasSizedConnectedSource = false
             desired = VisionWindowSizePolicy.login
         } else {
-            guard client.active != .none else { applied = nil; return }
             token = .source(client.connectedAt, client.active)
             guard token != applied else { return }
             if client.active == .desktop {
                 // No trustworthy Desktop aspect is carried by the protocol. The first Desktop
                 // gets a comfortable default; later picks keep the person's current native size.
                 applied = token // Record even a no-resize transition: A → Desktop → A is new.
-                guard !hasSizedConnectedSource else { return }
+                let initialSize = hasSizedConnectedSource ? nil : VisionWindowSizePolicy.desktopDefault
                 hasSizedConnectedSource = true
-                request(VisionWindowSizePolicy.desktopDefault, in: scene)
+                request(initialSize, in: scene)
                 return
             }
             let source: CGSize
@@ -109,27 +105,50 @@ final class VisionWindowGeometryView: UIView {
                     source = snapshot.size
                 } else {
                     // Host-initiated selections have no local request snapshot.
-                    guard let window = client.windows.first(where: { $0.id == id }) else { return }
+                    guard let window = client.windows.first(where: { $0.id == id }) else {
+                        releaseWhileWaiting(token, in: scene)
+                        return
+                    }
                     source = CGSize(width: window.width, height: window.height)
                 }
             case .desktop:
                 // Desktop has no source-bound catalog dimensions. An arbitrary latest video size
                 // can still belong to the previous window, so retain the person's current size.
                 return
-            case .none: return
+            case .none:
+                applied = token
+                request(nil, in: scene) // Waiting for a selection must not retain a previous lock.
+                return
             }
-            guard let size = VisionWindowSizePolicy.sceneSize(source: source, toolbar: toolbar) else { return }
-            desired = size
+            guard let geometry = VisionWindowSizePolicy.geometry(source: source) else {
+                releaseWhileWaiting(token, in: scene)
+                return
+            }
+            waitingForDimensions = nil
+            applied = token // Record before requesting; viewport updates cannot request themselves.
             hasSizedConnectedSource = true
+            request(geometry.preferred, in: scene, geometry: geometry)
+            return
         }
         guard token != applied else { return }
         applied = token // Store before requesting: a geometry update must never request itself.
         request(desired, in: scene)
     }
 
-    private func request(_ desired: CGSize, in scene: UIWindowScene) {
-        scene.requestGeometryUpdate(.Vision(size: desired, minimumSize: VisionWindowSizePolicy.minimum,
-                                             maximumSize: VisionWindowSizePolicy.maximum)) { error in
+    private func releaseWhileWaiting(_ token: Token, in scene: UIWindowScene) {
+        // Missing dimensions must release a previous window's ratio, but remain retryable
+        // when a later catalog supplies them. Do not send on every observed client change.
+        guard waitingForDimensions != token else { return }
+        waitingForDimensions = token
+        request(nil, in: scene)
+    }
+
+    private func request(_ desired: CGSize?, in scene: UIWindowScene,
+                         geometry: VisionWindowSizePolicy.WindowGeometry? = nil) {
+        scene.requestGeometryUpdate(.Vision(size: desired,
+                                             minimumSize: geometry?.minimum ?? VisionWindowSizePolicy.minimum,
+                                             maximumSize: geometry?.maximum ?? VisionWindowSizePolicy.maximum,
+                                             resizingRestrictions: geometry == nil ? .freeform : .uniform)) { error in
             print("spatial window size request declined: \(error.localizedDescription)")
         }
     }

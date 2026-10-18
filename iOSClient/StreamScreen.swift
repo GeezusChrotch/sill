@@ -1152,25 +1152,25 @@ struct StreamScreen: View {
     private func spatialLayout(size: CGSize) -> some View {
         let sidebar = spatialToolbarPosition == "left" && tour == nil
         let toolbarLength = max(750, size.width - 60)
-        return VStack(spacing: 24) {
-            if !sidebar {
-                VStack(spacing: 8) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        spatialToolbar(sidebar: false)
-                            .frame(width: toolbarLength)
-                    }
-                    .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-                    .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
-                                                  group: spatialToolbarHoverGroup))
-                    .frame(height: BarMetrics.regular.height)
-                    spatialVisibilityButton(sidebar: false)
-                }
-                .hoverEffectGroup(spatialToolbarHoverGroup)
+        // During the onboarding tour only, keep the original inline toolbar so its
+        // target anchors share TourOverlay's scene coordinate space. This temporary
+        // inset never requests a new scene geometry or changes the saved source ratio.
+        return VStack(spacing: tour == nil ? 0 : 24) {
+            if tour != nil {
+                spatialTopToolbar(size: size, length: toolbarLength)
             }
             contentArea(bar: .regular)
                 .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
         }
         .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+        // Outside the tour all fixed-size controls live outside the scene, allowing
+        // uniform native resizing to preserve the picture aspect at every size.
+        .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
+            if !sidebar && tour == nil {
+                spatialTopToolbar(size: size, length: toolbarLength)
+                    .padding(.bottom, 24)
+            }
+        }
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
             if sidebar {
                 HStack(spacing: 8) {
@@ -1191,6 +1191,24 @@ struct StreamScreen: View {
                 .padding(.trailing, 24)
             }
         }
+    }
+
+    private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
+        VStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                spatialToolbar(sidebar: false)
+                    .frame(width: length)
+            }
+            .frame(width: size.width, height: BarMetrics.regular.height)
+            .popover(isPresented: Binding(get: { tour == nil && windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
+                spatialSidebarWindowMenu
+            }
+            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                          group: spatialToolbarHoverGroup))
+            spatialVisibilityButton(sidebar: false)
+        }
+        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     @ViewBuilder
@@ -1281,7 +1299,7 @@ struct StreamScreen: View {
 
     private var rootWindowMenuAllowed: Bool {
         #if os(visionOS)
-        spatialToolbarPosition != "left" || tour != nil
+        tour != nil // Both native ornaments present their own popover outside the inline tour.
         #else
         true
         #endif
@@ -1385,7 +1403,9 @@ struct StreamScreen: View {
             // The panel itself, inside the padding: the size the host fits the Mac window to.
             .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { panelSize = $0 })
             .tourTarget(.stream)
+            #if !os(visionOS)
             .padding(8)
+            #endif
 
             // The dim comes after the overlay on purpose: with the drawer open a tap on the dim
             // closes the drawer instead of clicking the Mac.

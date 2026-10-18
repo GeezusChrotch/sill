@@ -1,27 +1,33 @@
 import Foundation
 import CoreGraphics
 
-/// One source selection supplies one preferred native size. Viewport or later encoded sizes do
-/// not revise it, so fitting the Mac window cannot feed back into native scene sizing.
+/// Scene and picture have the same ratio. Both toolbars are ornaments, and the picture
+/// has no additive padding: uniform native resizing therefore preserves the source aspect.
+/// Only the selection snapshot supplies this geometry, never a resized viewport/video frame.
 enum VisionWindowSizePolicy {
-    enum Toolbar { case top, left, hidden }
     static let login = CGSize(width: 580, height: 480)
     static let desktopDefault = CGSize(width: 1200, height: 800)
     static let minimum = CGSize(width: 440, height: 360)
     static let maximum = CGSize(width: 1400, height: 1050)
 
-    static func sceneSize(source: CGSize, toolbar: Toolbar) -> CGSize? {
+    struct WindowGeometry {
+        let preferred: CGSize
+        let minimum: CGSize
+        let maximum: CGSize
+    }
+
+    static func geometry(source: CGSize) -> WindowGeometry? {
         guard source.width.isFinite, source.height.isFinite,
               source.width > 0, source.height > 0 else { return nil }
-        let chrome: CGSize
-        switch toolbar {
-        case .top: chrome = CGSize(width: 16, height: 194)
-        case .left: chrome = CGSize(width: 16, height: 16) // Leading ornament lives outside the scene.
-        case .hidden: chrome = CGSize(width: 16, height: 16)
+        // Fit both envelopes uniformly. Independent per-axis clamping would change the ratio,
+        // especially for tiny, very wide, or very tall windows. The minimum envelope is soft:
+        // its shorter dimension may be below the login/Desktop minimum for unusual ratios.
+        let minimumScale = min(minimum.width / source.width, minimum.height / source.height)
+        let maximumScale = min(maximum.width / source.width, maximum.height / source.height)
+        func scaled(_ scale: CGFloat) -> CGSize {
+            CGSize(width: source.width * scale, height: source.height * scale)
         }
-        let available = CGSize(width: maximum.width - chrome.width, height: maximum.height - chrome.height)
-        let scale = min(1, available.width / source.width, available.height / source.height)
-        return CGSize(width: min(maximum.width, max(minimum.width, source.width * scale + chrome.width)),
-                      height: min(maximum.height, max(minimum.height, source.height * scale + chrome.height)))
+        return WindowGeometry(preferred: scaled(min(maximumScale, max(minimumScale, 1))),
+                              minimum: scaled(minimumScale), maximum: scaled(maximumScale))
     }
 }
