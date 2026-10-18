@@ -1,27 +1,5 @@
 import SwiftUI
 
-private struct VisionToolbarPositionKey: EnvironmentKey {
-    static let defaultValue: Binding<String>? = nil
-}
-
-extension EnvironmentValues {
-    var visionToolbarPosition: Binding<String>? {
-        get { self[VisionToolbarPositionKey.self] }
-        set { self[VisionToolbarPositionKey.self] = newValue }
-    }
-}
-
-private struct VisionToolbarAutomaticKey: EnvironmentKey {
-    static let defaultValue: Binding<Bool>? = nil
-}
-
-extension EnvironmentValues {
-    var visionToolbarAutomatic: Binding<Bool>? {
-        get { self[VisionToolbarAutomaticKey.self] }
-        set { self[VisionToolbarAutomaticKey.self] = newValue }
-    }
-}
-
 /// All activation stays in the system hover compositor. No gaze position or hover state enters
 /// application state, and revealing the toolbar never changes the stream's measured viewport.
 struct VisionToolbarReveal: ViewModifier {

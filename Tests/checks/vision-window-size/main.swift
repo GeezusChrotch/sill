@@ -32,6 +32,16 @@ let ordinary = VisionWindowSizePolicy.geometry(source: CGSize(width: 1000, heigh
 expect(ordinary.preferred == CGSize(width: 1000, height: 700), "Ordinary source should open at source size")
 expect(VisionWindowSizePolicy.geometry(source: CGSize(width: 60, height: 40))!.preferred == CGSize(width: 440, height: 440.0 * 2 / 3),
        "Tiny source should enlarge uniformly to the minimum envelope")
+// Desktop capture can be Retina landscape, portrait, or an ultrawide display. Use
+// decoded pixels (not the previous 1200×800 default) and keep exact ratio at every bound.
+for desktop in [CGSize(width: 3024, height: 1964), CGSize(width: 1920, height: 1080),
+                CGSize(width: 2160, height: 3840), CGSize(width: 5120, height: 1440)] {
+    let geometry = VisionWindowSizePolicy.geometry(source: desktop)!
+    for size in [geometry.minimum, geometry.preferred, geometry.maximum] {
+        expect(sameRatio(size, desktop), "Desktop lost decoded source ratio")
+    }
+
+}
 for bad in [CGSize.zero, CGSize(width: 0, height: 10), CGSize(width: -1, height: 10), CGSize(width: CGFloat.infinity, height: 10), CGSize(width: 10, height: CGFloat.nan)] {
     expect(VisionWindowSizePolicy.geometry(source: bad) == nil, "Invalid geometry must wait for a real source")
 }

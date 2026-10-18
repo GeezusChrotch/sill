@@ -143,59 +143,52 @@ connection error if the window remains unavailable. A later explicit app/window 
 that pending selection. Choosing an app with an existing window selects it immediately, including
 when its catalog is unchanged; selections made during a stream switch wait for it to finish.
 
-During normal streaming the rail contains window previews and one Controls gear. Looking at
-the gear reveals Apps, Mac menus, text size, Touch/Mouse, Keyboard, Desktop and Settings in a
-separate floating tray. Activating the gear keeps the tray open explicitly. Preview space and
-picture geometry do not change during reveal. The left rail retains its width-driven extended
-height; space previously occupied by controls now belongs to previews. The tray can scroll in
-narrow scenes, and VoiceOver exposes it without requiring gaze.
+During normal streaming, window previews and Desktop share the top bar. Apps, Mac menus,
+text size, Touch/Mouse, Keyboard and Settings occupy a vertical bar on the left. Both bars
+are native ornaments outside the picture, so reveal and collapse do not resize the stream.
+The controls bar scrolls vertically when the scene is short; previews scroll horizontally.
+Window actions and text size retain native popovers. The guided tour temporarily retains
+its full inline toolbar so its spotlight targets share the scene coordinate space.
 
-The controls use a separate system hover group. Preview hover and preview window actions do not
-reveal the tray. Open control panels keep it visible; accepted remote input clears its explicit
-reveal and resets both hover groups. Moving into the tray preserves the already-visible rail on
-visionOS26+. No gaze state or coordinates enter application state. Actual gaze transitions and
-hidden-control hit testing remain device-acceptance checks. The guided tour retains the full
-inline toolbar for its existing spotlight targets.
+A single centered frosted pill has no visible symbol or text. Looking at it reveals both
+bars together. Clicking it switches between pinned open and Auto; clicking again returns
+to Auto. This choice is saved per scene. There is no toolbar-position setting or separate
+Controls gear/tray. Open panels, window actions and VoiceOver keep both bars visible while
+needed. Pinned open remains visible through remote input until the pill returns to Auto.
 
-Toolbar position and Always show toolbar are saved per scene. The centered frosted pill has
-no visible symbol or text; gaze reveals its toolbar, and tapping it provides an accessible
-explicit reveal that lasts until remote control. Always show is available only in Settings.
-The old manually-hidden preference is no longer read, so a restored scene always retains its
-glance target. Toolbar/stream geometry stays fixed as the compositor reveals or hides controls.
-
-On visionOS 26+, a scene-local `HoverEffectGroup` activates from the toolbar/pill. An explicit
-no-op hover effect on the content surface and surrounding layout uses `preservesGroup`: looking
-back at the picture keeps an already revealed group active without revealing an inactive one.
-An accepted remote click, key, text insertion or scroll starts a control episode and changes
-that scene's group identity, allowing the toolbar to collapse. Pointer hover/movement and
-source selection do not dismiss it. Gaze state never enters app code. Looking outside this
-app can end the group after a one-second exit delay; open tools and VoiceOver keep it visible.
-On visionOS 2–25, the persistence API is unavailable: gaze reveal has the one-second exit grace,
-and tapping the pill still keeps it visible until remote control. These are supported-system
-behaviors awaiting real-headset acceptance, not a claim of tracked gaze or infinite persistence.
-
-Both toolbar positions are native ornaments outside the streamed scene. The left toolbar's
-height equals the horizontal toolbar's offered width, and its preview strip receives the space
-remaining after fixed controls. Both positions use native popovers for window actions and text
-size. The guided tour temporarily uses an inline top toolbar so its spotlight and cards share
-the scene coordinate space; this may letterbox during the tour. Completing or dismissing it
-restores the saved ornament arrangement without changing the source aspect lock.
+On visionOS 26+, one scene-local `HoverEffectGroup` controls both bars. A no-op hover effect
+on the content surface uses `preservesGroup`: looking back at the picture keeps an already
+revealed group active without revealing an inactive one. In Auto, an accepted remote click,
+key, text insertion or scroll starts a control episode and changes that scene's group identity,
+allowing both bars to collapse together. Pointer hover/movement and preview selection do not
+dismiss them. No gaze coordinates or gaze state enter app code. Looking outside this app can
+end the group after a one-second exit delay. On visionOS 2–25, the persistence API is unavailable:
+gaze reveal retains the one-second exit grace; the pill can pin both bars open. Actual gaze
+transitions and hidden-control hit testing remain real-headset acceptance checks.
 
 The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
 only its own UIWindowScene and requests a bounded preferred size once per connected Mac-window
 selection. Mac-window sizing freezes the catalog's point size before sending the source request;
-a secondary scene carries its parent's pre-launch snapshot through the opaque in-memory seed. The first Desktop after connecting gets a comfortable 1200 × 800 point default; later Desktop
-picks keep the current native size because the protocol has no source-bound Desktop dimensions.
-Selected-window scenes request uniform resizing with that source aspect, and the picture fills
-the scene without fixed padding. Minimum, preferred and maximum sizes are scaled uniformly,
-so resizing does not introduce a different picture aspect. Login, Desktop and selections still
-awaiting valid dimensions explicitly allow freeform resizing. Later video/catalog changes do
-not change the native ratio or create a viewport-to-scene sizing loop; selecting another source
-sets its ratio. Geometry requests remain system preferences and can be declined or constrained,
+a secondary scene carries its parent's pre-launch snapshot through the opaque in-memory seed.
+Desktop waits for valid HEVC dimensions received after the host acknowledges that selection,
+then locks the native scene to the encoded Desktop aspect. This can wait until the next
+keyframe, up to about four seconds. The matching host fences retired encoder output before
+acknowledging a source switch, so the dimensions belong to Desktop. Older hosts without that
+fence can briefly supply a stale shape until the next Desktop keyframe; the client does not
+reuse its cached video dimensions.
+Selected-window and Desktop scenes request uniform resizing with the source aspect, and the
+picture fills the scene without fixed padding. Minimum, preferred and maximum sizes scale
+uniformly. Login and selections awaiting valid dimensions allow freeform resizing. Later
+window video/catalog changes preserve the selection snapshot; Desktop updates only when its
+encoded dimensions change. Desktop capture does not follow the viewport, so neither path
+creates a viewport-to-scene sizing loop. Geometry requests remain system preferences and can
+be declined or constrained,
 especially for extreme aspect ratios. Mac apps with their own window-size limits or a second
 viewer of an already fitted window can still produce a source frame with different dimensions;
 the renderer preserves the full image without cropping or stretching.
 
-Debug visual checks can use `-SillControls 1` for the explicitly revealed tray, `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1` with the existing layout harness. The pure sizing check is
+Debug visual checks can use `-SillControls 1` to pin both bars open or
+`-SillToolbarAutomatic 0|1` with the existing layout harness. `-SillToolbar top|left` is no
+longer read. The pure sizing check is
 `Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input
 still require Vision Pro acceptance.

@@ -3,6 +3,9 @@ import Network
 import QuartzCore
 import UIKit
 import StreamProtocol
+#if os(visionOS)
+import CoreMedia
+#endif
 
 /// A Mac on the connect screen: one the network browser lists, one seen only over peer-to-peer
 /// Wi-Fi (Direct: its Direct Wireless Connection is on and no network is shared), or a saved Mac
@@ -240,6 +243,9 @@ final class StreamClient: ObservableObject {
         let size: CGSize
     }
     @Published private(set) var spatialPreferredSourceSize: SpatialSourceSize?
+    /// Only parameter sets received after the host acknowledges Desktop may supply its ratio.
+    /// A previous window's `videoSize` can survive a source switch (including equal formats).
+    @Published private(set) var spatialDesktopVideoSize: CGSize?
     @Published private(set) var supportsSpatialWindows = false
     /// Secondary windows must never fall back to an older host's shared selection.
     private var requiresSpatialCapability = false
@@ -433,6 +439,8 @@ final class StreamClient: ObservableObject {
     }
     @Published private(set) var visionPointerKnown = false
     // Network-queue source boundary, reset before any later pointer reports are accepted.
+    private var visionDesktopSourceEpoch = UUID() // network queue, only changes at source boundaries
+    private var visionAcknowledgedDesktopEpoch = UUID() // main queue
     private var visionPointerSource: StreamSource = .none
     private var visionPointerGeometryRevision = 0 // network queue
     private var visionPointerFrameReady = false // network queue
@@ -3844,6 +3852,8 @@ final class StreamClient: ObservableObject {
     private func resetPointerFeed() {
         #if os(visionOS)
         visionReadySource = .none
+        spatialDesktopVideoSize = nil
+        visionAcknowledgedDesktopEpoch = UUID()
         visionMouseCenter.cancel()
         #endif
         pointerFeed.reset()
@@ -3851,6 +3861,7 @@ final class StreamClient: ObservableObject {
             self.pointerFeed.reset()
             #if os(visionOS)
             self.visionPointerSource = .none
+            self.visionDesktopSourceEpoch = UUID()
             self.visionPointerGeometryRevision += 1
             self.visionPointerFrameReady = false
             #endif
@@ -4016,6 +4027,17 @@ final class StreamClient: ObservableObject {
         }
     }
 
+    #if os(visionOS)
+    /// Parse the actual encoded frame dimensions without relying on display-view creation or
+    /// its change-only main-thread callback. Desktop capture is independent of scene viewport.
+    private static func spatialVideoSize(_ ps: ParameterSets) -> CGSize? {
+        guard let description = HEVCDisplayView.makeFormatDescription(ps) else { return nil }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+        guard dimensions.width > 0, dimensions.height > 0 else { return nil }
+        return CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
+    }
+    #endif
+
     /// On the network queue.
     private func handle(_ header: StreamHeader, _ data: Data) {
         switch header.kind {
@@ -4036,6 +4058,19 @@ final class StreamClient: ObservableObject {
                 #endif
                 lastParameterSets = ps
                 onParameterSets?(ps)
+                #if os(visionOS)
+                // The source catalog and parameter sets share this ordered network queue. Wait
+                // for a set after Desktop's acknowledgment rather than reusing an old picture.
+                // Repeated keyframe sets still count when the decoder's format did not change.
+                if visionPointerSource == .desktop, let size = Self.spatialVideoSize(ps) {
+                    let from = connection, epoch = visionDesktopSourceEpoch
+                    DispatchQueue.main.async {
+                        guard self.connection === from, self.connected, self.active == .desktop,
+                              self.visionAcknowledgedDesktopEpoch == epoch else { return }
+                        if self.spatialDesktopVideoSize != size { self.spatialDesktopVideoSize = size }
+                    }
+                }
+                #endif
             }
         case .frame:
             // Every frame is a sample, stamped on arrival before the hand-off to the display layer:
@@ -4064,11 +4099,13 @@ final class StreamClient: ObservableObject {
             guard let list = Wire.decode(WindowList.self, from: data) else { return }
             #if os(visionOS)
             if visionPointerSource != list.active {
+                visionDesktopSourceEpoch = UUID()
                 visionPointerSource = list.active
                 visionPointerGeometryRevision += 1
                 visionPointerFrameReady = false
                 pointerFeed.reset()
             }
+            let desktopEpoch = visionDesktopSourceEpoch
             #endif
             let from = connection
             DispatchQueue.main.async {
@@ -4123,12 +4160,20 @@ final class StreamClient: ObservableObject {
                     #endif
                 }
                 if self.macName != list.macName { self.macName = list.macName; self.loadWindowOrder() }
+                #if os(visionOS)
+                self.visionAcknowledgedDesktopEpoch = desktopEpoch
+                #endif
                 let previous = self.active
                 // A selection acknowledges the full catalog again, often unchanged. Publishing
                 // equal values invalidates every observer of this client, including the top bar.
                 if self.runningApps != list.runningApps { self.runningApps = list.runningApps }
                 if self.windows != list.windows { self.windows = list.windows }
-                if self.active != list.active { self.active = list.active }
+                if self.active != list.active {
+                    #if os(visionOS)
+                    self.spatialDesktopVideoSize = nil
+                    #endif
+                    self.active = list.active
+                }
                 // Keep existing image objects and publish only when a thumbnail really disappears.
                 let live = Set(list.windows.map(\.id))
                 if self.thumbnails.keys.contains(where: { !live.contains($0) }) {

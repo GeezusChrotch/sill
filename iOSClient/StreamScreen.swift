@@ -103,10 +103,7 @@ enum DuoLayout {
 struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     #if os(visionOS)
-    @SceneStorage("Sill.spatialToolbarPosition") private var spatialToolbarPosition = "top"
     @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
-    @State private var spatialToolbarPresented = false
-    @State private var spatialControlsPresented = false
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
     @Namespace private var spatialToolbarHoverNamespace
@@ -211,7 +208,7 @@ struct StreamScreen: View {
         _keyboardShown = State(initialValue: keyboardShown)
         #if os(visionOS)
         // Native popovers need a presented host. The launch-argument harness opens this after
-        // attachment and toolbar-position restoration, through the same binding as the button.
+        // attachment, through the same binding as the button.
         _scaleOpen = State(initialValue: false)
         #else
         _scaleOpen = State(initialValue: scaleOpen)
@@ -339,9 +336,6 @@ struct StreamScreen: View {
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
             #if os(visionOS)
-            .environment(\.visionToolbarPosition, $spatialToolbarPosition)
-            .environment(\.visionToolbarAutomatic, $spatialToolbarAutomatic)
-            .onChange(of: spatialToolbarPosition) { _, _ in closeWindowMenu(); scaleOpen = false }
             .onChange(of: client.active) { _, _ in spatialToolbarScrollActive = false }
             .onChange(of: client.connectedAt) { _, _ in spatialToolbarScrollActive = false }
             .onChange(of: scenePhase) { _, _ in spatialToolbarScrollActive = false }
@@ -586,16 +580,12 @@ struct StreamScreen: View {
         let defaults = UserDefaults.standard
         #if os(visionOS)
         if defaults.bool(forKey: "SillMouseMode") { client.visionMouseMode = true }
-        if let position = defaults.string(forKey: "SillToolbar"), ["top", "left"].contains(position) {
-            spatialToolbarPosition = position
-        }
         if defaults.object(forKey: "SillToolbarAutomatic") != nil {
             spatialToolbarAutomatic = defaults.bool(forKey: "SillToolbarAutomatic")
         }
         #if DEBUG
         if defaults.bool(forKey: "SillControls") {
-            spatialControlsPresented = true
-            spatialToolbarPresented = true
+            spatialToolbarAutomatic = false
         }
         #endif
         #endif
@@ -1152,68 +1142,31 @@ struct StreamScreen: View {
         HoverEffectGroup(id: "toolbar-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
     }
 
-    private var spatialControlsHoverGroup: HoverEffectGroup {
-        HoverEffectGroup(id: "controls-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
-    }
-
     private var spatialToolbarUsesHover: Bool {
-        spatialToolbarAutomatic && !spatialToolbarPinned && !spatialToolbarPresented
+        spatialToolbarAutomatic && !spatialToolbarPinned
     }
 
     private func spatialLayout(size: CGSize) -> some View {
-        let sidebar = spatialToolbarPosition == "left" && tour == nil
         let toolbarLength = tour == nil ? max(180, size.width - 60) : max(750, size.width - 60)
-        let sidebarLength = max(750, size.width - 60)
-        // During the onboarding tour only, keep the original inline toolbar so its
-        // target anchors share TourOverlay's scene coordinate space. This temporary
-        // inset never requests a new scene geometry or changes the saved source ratio.
+        // During onboarding, preserve the inline target anchors in TourOverlay's
+        // scene coordinate space. Native ornaments never change the picture's size.
         return VStack(spacing: tour == nil ? 0 : 24) {
             if tour != nil {
-                spatialTopToolbar(size: size, length: toolbarLength)
+                spatialToolbar(sidebar: false).frame(width: toolbarLength)
             }
             contentArea(bar: .regular)
                 .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
-                .modifier(VisionToolbarPreserve(group: spatialControlsHoverGroup))
         }
-        .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
-        // Outside the tour all fixed-size controls live outside the scene, allowing
-        // uniform native resizing to preserve the picture aspect at every size.
         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
-            if !sidebar && tour == nil {
+            if tour == nil {
                 spatialTopToolbar(size: size, length: toolbarLength)
                     .padding(.bottom, 24)
             }
         }
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
-            if sidebar {
-                HStack(spacing: 8) {
-                    // Only the gear shares the rail with previews. The separate tray
-                    // never reserves preview space or changes the picture geometry.
-                    spatialCompactRail(sidebar: true, length: sidebarLength)
-                        .frame(width: 132, height: sidebarLength)
-                        .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .trailing) {
-                            spatialSidebarWindowMenu
-                        }
-                        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-                        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
-                                                      group: spatialToolbarHoverGroup))
-                    spatialVisibilityButton(sidebar: true)
-                }
-                .hoverEffectGroup(spatialToolbarHoverGroup)
-                .padding(.trailing, 24)
-            }
-        }
-        .ornament(attachmentAnchor: .scene(sidebar ? .leading : .topTrailing), contentAlignment: sidebar ? .trailing : .bottomTrailing) {
             if tour == nil {
-                spatialControlsTray(width: max(180, min(600, size.width - 48)))
-                    // Meet the stable gear from outside the rail. Expansion is entirely
-                    // compositor-driven; neither rail nor scene changes its layout.
-                    .padding(.trailing, sidebar ? 232 : 68)
-                    .padding(.bottom, sidebar ? 0 : 180)
-                    // Native ornaments clip visual offsets outside their intrinsic
-                    // bounds. Reserve the rail's height so the tray really lays out
-                    // beside its bottom gear instead of being translated out of view.
-                    .frame(height: sidebar ? sidebarLength : nil, alignment: .bottom)
+                spatialControlsBar(height: max(180, min(750, size.height)))
+                    .padding(.trailing, 24)
             }
         }
     }
@@ -1221,20 +1174,16 @@ struct StreamScreen: View {
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
         VStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                if tour != nil {
-                    spatialToolbar(sidebar: false).frame(width: length)
-                } else {
-                    spatialCompactRail(sidebar: false, length: length)
-                }
+                spatialToolbar(sidebar: false, content: .previews).frame(width: length)
             }
             .frame(width: size.width, height: BarMetrics.regular.height)
-            .popover(isPresented: Binding(get: { tour == nil && windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
+            .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
                 spatialSidebarWindowMenu
             }
             .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
             .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                           group: spatialToolbarHoverGroup))
-            spatialVisibilityButton(sidebar: false)
+            spatialVisibilityButton
         }
         .hoverEffectGroup(spatialToolbarHoverGroup)
     }
@@ -1259,37 +1208,15 @@ struct StreamScreen: View {
         }
     }
 
-    private func spatialCompactRail(sidebar: Bool, length: CGFloat) -> some View {
-        let layout = sidebar ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
-        return layout {
-            spatialToolbar(sidebar: sidebar, thumbnailHeight: max(80, length - 106), content: .previews)
-            BarButton(open: spatialControlsPresented, width: BarMetrics.regular.buttonWidth,
-                      height: BarMetrics.regular.buttonHeight, accessibilityLabel: "Controls and Settings") {
-                spatialControlsPresented.toggle()
-                spatialToolbarPresented = true
-            } content: {
-                VStack(spacing: 4) {
-                    Image(systemName: "gearshape").font(.system(size: 22))
-                    Text("Controls").font(.system(size: 11, weight: .medium))
-                }
-            }
-            .hoverEffect(in: spatialControlsHoverGroup) { effect, _, _ in effect }
-            .accessibilityHint("Look to reveal controls, or activate to keep them open. Settings is in the controls tray.")
+    private func spatialControlsBar(height: CGFloat) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            spatialToolbar(sidebar: true, content: .controls)
         }
-        .padding(sidebar ? .vertical : .trailing, 8)
-        .frame(width: sidebar ? nil : length)
-    }
-
-    private func spatialControlsTray(width: CGFloat) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            spatialToolbar(sidebar: false, content: .controls)
-        }
-        .frame(width: width, height: BarMetrics.regular.height)
+        .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-        .modifier(VisionToolbarReveal(automatic: !spatialControlsPinned && !spatialControlsPresented,
-                                      reduceMotion: reduceMotion, group: spatialControlsHoverGroup, anchor: .bottomTrailing))
-        .hoverEffectGroup(spatialControlsHoverGroup)
-        .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                      group: spatialToolbarHoverGroup, anchor: .topTrailing))
+        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200, content: TopBar.Content = .all) -> some View {
@@ -1311,22 +1238,25 @@ struct StreamScreen: View {
         spatialControlsPinned || windowMenu != nil || tour != nil
     }
 
-    private func spatialVisibilityButton(sidebar: Bool) -> some View {
-        let title = "Show toolbar"
-        return Button {
-            spatialToolbarPresented = true
+    private var spatialVisibilityButton: some View {
+        Button {
+            spatialToolbarAutomatic.toggle()
             spatialToolbarScrollActive = false
+            // Returning to Auto begins a fresh hidden phase for both bars.
+            spatialToolbarHoverGeneration += 1
         } label: {
             Capsule()
                 .fill(.clear)
-                .frame(width: sidebar ? 10 : 44, height: sidebar ? 44 : 10)
+                .frame(width: 44, height: 10)
                 .glassBackgroundEffect(in: Capsule())
                 .frame(width: 60, height: 60)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .hoverEffect(.highlight)
-        .accessibilityLabel(title)
+        .accessibilityLabel(spatialToolbarAutomatic ? "Keep toolbars open" : "Automatically hide toolbars")
+        .accessibilityValue(spatialToolbarAutomatic ? "Automatic" : "Pinned open")
+        .accessibilityHint("Look at this pill to reveal both toolbars. Activate to switch between pinned open and automatic visibility.")
     }
 
     /// An explicit remote click, scroll or key starts control. Merely moving a
@@ -1354,9 +1284,7 @@ struct StreamScreen: View {
             default: controlling = false
             }
             if controlling {
-                spatialToolbarPresented = false
-                spatialControlsPresented = false
-                spatialToolbarHoverGeneration += 1
+                if spatialToolbarAutomatic { spatialToolbarHoverGeneration += 1 }
             }
             send(event)
         }
@@ -1670,6 +1598,9 @@ private struct TopBar: View {
                     .frame(minWidth: vertical ? nil : content == .previews ? 60 : 160)
                     #endif
                     .tourTarget(.strip, inset: WindowStrip.tourBand(pad: metrics.thumbPad))
+                #if os(visionOS)
+                if content == .previews { desktopButton }
+                #endif
                 // The book pose: the fold's band, and nothing on it, between the strip and the buttons.
                 if stripWidth != nil { Spacer(minLength: 0) }
             }
@@ -1735,11 +1666,11 @@ private struct TopBar: View {
                     .allowsHitTesting(!scaleOpen)
                     .tourTarget(.keyboard)
 
-                button(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop",
-                       accessibilityLabel: "Show the full Mac desktop",
-                       action: { client.select(.desktop) })
-                    .opacity(scaleOpen ? 0 : 1)
-                    .allowsHitTesting(!scaleOpen)
+                #if os(visionOS)
+                if content == .all { desktopButton }
+                #else
+                desktopButton
+                #endif
 
                 // Leave's old slot: Disconnect is the Settings panel's pinned last row now.
                 button(open: settingsOpen, symbol: "gearshape", label: "Settings",
@@ -1769,6 +1700,24 @@ private struct TopBar: View {
         #else
         vertical ? 8 : metrics.padding
         #endif
+    }
+
+    private var desktopButton: some View {
+        button(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop",
+               accessibilityLabel: "Show the full Mac desktop",
+               action: {
+                   #if os(visionOS)
+                   if content == .previews { scaleOpen = false }
+                   #endif
+                   client.select(.desktop)
+               })
+            #if os(visionOS)
+            .opacity(content == .previews ? 1 : scaleOpen ? 0 : 1)
+            .allowsHitTesting(content == .previews || !scaleOpen)
+            #else
+            .opacity(scaleOpen ? 0 : 1)
+            .allowsHitTesting(!scaleOpen)
+            #endif
     }
 
     private func keyboardTapped() {

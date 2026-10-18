@@ -3,10 +3,10 @@ import CoreGraphics
 
 /// Scene and picture have the same ratio. Both toolbars are ornaments, and the picture
 /// has no additive padding: uniform native resizing therefore preserves the source aspect.
-/// Only the selection snapshot supplies this geometry, never a resized viewport/video frame.
+/// Window selections use their frozen source snapshot; Desktop uses source-bound HEVC
+/// dimensions because Desktop capture does not follow the scene viewport.
 enum VisionWindowSizePolicy {
     static let login = CGSize(width: 580, height: 480)
-    static let desktopDefault = CGSize(width: 1200, height: 800)
     static let minimum = CGSize(width: 440, height: 360)
     static let maximum = CGSize(width: 1400, height: 1050)
 

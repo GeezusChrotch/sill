@@ -27,13 +27,12 @@ struct VisionWindowGeometry: UIViewRepresentable {
 final class VisionWindowGeometryView: UIView {
     private enum Token: Equatable {
         case login
-        case source(Date?, StreamSource)
+        case source(Date?, StreamSource, CGSize?)
     }
     private weak var client: StreamClient?
     private weak var owningScene: UIWindowScene?
     private var applied: Token?
     private var waitingForDimensions: Token?
-    private var hasSizedConnectedSource = false
     private var disconnected = false
     private var observers: [NSObjectProtocol] = []
 
@@ -84,20 +83,11 @@ final class VisionWindowGeometryView: UIView {
         let desired: CGSize
         if !client.connected {
             token = .login
-            hasSizedConnectedSource = false
             desired = VisionWindowSizePolicy.login
         } else {
-            token = .source(client.connectedAt, client.active)
+            token = .source(client.connectedAt, client.active,
+                            client.active == .desktop ? client.spatialDesktopVideoSize : nil)
             guard token != applied else { return }
-            if client.active == .desktop {
-                // No trustworthy Desktop aspect is carried by the protocol. The first Desktop
-                // gets a comfortable default; later picks keep the person's current native size.
-                applied = token // Record even a no-resize transition: A → Desktop → A is new.
-                let initialSize = hasSizedConnectedSource ? nil : VisionWindowSizePolicy.desktopDefault
-                hasSizedConnectedSource = true
-                request(initialSize, in: scene)
-                return
-            }
             let source: CGSize
             switch client.active {
             case .window(let id):
@@ -112,9 +102,11 @@ final class VisionWindowGeometryView: UIView {
                     source = CGSize(width: window.width, height: window.height)
                 }
             case .desktop:
-                // Desktop has no source-bound catalog dimensions. An arbitrary latest video size
-                // can still belong to the previous window, so retain the person's current size.
-                return
+                guard let desktop = client.spatialDesktopVideoSize else {
+                    releaseWhileWaiting(token, in: scene)
+                    return
+                }
+                source = desktop
             case .none:
                 applied = token
                 request(nil, in: scene) // Waiting for a selection must not retain a previous lock.
@@ -126,7 +118,6 @@ final class VisionWindowGeometryView: UIView {
             }
             waitingForDimensions = nil
             applied = token // Record before requesting; viewport updates cannot request themselves.
-            hasSizedConnectedSource = true
             request(geometry.preferred, in: scene, geometry: geometry)
             return
         }

@@ -148,6 +148,7 @@ final class StreamServer {
     static let independentSessionLimit = 4
     var onIndependentSession: ((StreamServer, NWConnection, ClientRoute, ClientLink.Route?, Hello) -> Void)?
     private var pipelineClients: [Client] { clients.values.filter { $0.connectedAnnounced && !$0.independentRefused && ($0.sessionOwner ?? self) === self } }
+    private let outputGate: StreamOutputGate
     private var lastParameterSets: Data?
     /// A client was admitted (home door at `.ready`, remote door once paired and checked), with
     /// its route (which door, from where) and, for a home client, its link (ClientLink.route; nil
@@ -422,6 +423,7 @@ final class StreamServer {
         self.sessionParent = sessionParent
         let queue = sessionParent?.queue ?? DispatchQueue(label: "sill.net", qos: .userInteractive)
         self.queue = queue
+        self.outputGate = StreamOutputGate(queue: queue)
         let test = DoorPolicy.isTestHost(advertises: advertise, bundled: !testHooks)
         // The synthetic test host does not advertise: a device would otherwise find it, connect,
         // and show the test pattern (Noah saw "a white moving wall", 2026-09-23). Test clients
@@ -1403,8 +1405,10 @@ final class StreamServer {
     /// The source is changing: forget the old parameter sets and make every client wait for
     /// the next keyframe, so nobody decodes frames of the new window with the old format. Each
     /// client's link keeps its judgement (`resetLinks` is the coordinator's to call).
-    func resetForNewStream() {
-        queue.async { [self] in
+    /// The returned token admits only this pipeline attempt's encoded output.
+    @discardableResult
+    func resetForNewStream() -> StreamOutputGate.Generation {
+        outputGate.reset { [self] in
             lastParameterSets = nil
             for client in pipelineClients {
                 client.needsKeyframe = true
@@ -1561,10 +1565,11 @@ final class StreamServer {
         return "\(median)/\(max(worst, median)) ms"
     }
 
-    /// Thread-safe: hops onto the network queue.
-    func broadcast(_ message: StreamMessage) {
+    /// Thread-safe: hops onto the network queue. Encoded output supplies its generation;
+    /// stale callbacks are rejected before changing the cached format or sending any bytes.
+    func broadcast(_ message: StreamMessage, generation: StreamOutputGate.Generation? = nil) {
         let data = message.serialized()
-        queue.async { [self] in
+        outputGate.enqueue(generation: generation) { [self] in
             if message.kind == .parameterSets { lastParameterSets = data }
             if message.kind == .frame, message.isKeyframe { lastKeyframeAt = Date().timeIntervalSince1970 }
             var wantKeyframe = false

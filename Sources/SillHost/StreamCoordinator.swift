@@ -1528,7 +1528,7 @@ package final class StreamCoordinator {
         }
         releaseKeysOfDevicesThatLeft()
         encoder = nil                  // deinit invalidates the VT session
-        server.resetForNewStream()          // every client waits for the next parameter sets + keyframe
+        server.resetForNewStream()          // retire callbacks before any new source acknowledgment
         // New settings take effect here, between pipelines, before the rate, the scale and the
         // stage are worked out for the next one.
         var leftStage = false
@@ -1734,12 +1734,15 @@ package final class StreamCoordinator {
             }
         }
         let server = self.server
+        // Each attempt gets its own generation, including the physical-window fallback
+        // after a staged capture fails. Retire output from that failed attempt as well.
+        let generation = server.resetForNewStream()
         enc.onEncoded = { data, isKey, parameterSets in
             let now = Date().timeIntervalSince1970
             if let ps = parameterSets {
-                server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: ps.encoded()))
+                server.broadcast(StreamMessage(kind: .parameterSets, timestamp: now, isKeyframe: true, payload: ps.encoded()), generation: generation)
             }
-            server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: isKey, payload: data))
+            server.broadcast(StreamMessage(kind: .frame, timestamp: now, isKeyframe: isKey, payload: data), generation: generation)
         }
         if let filter {
             capture.onFrame = { pixelBuffer, pts in enc.encode(pixelBuffer, pts: pts) }

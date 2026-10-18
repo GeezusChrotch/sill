@@ -278,21 +278,7 @@ final class HEVCDisplayView: UIView {
         let encoded = ps.encoded()
         if encoded == lastParameterSets, formatDescription != nil { return }
         lastParameterSets = encoded
-        let buffers = ps.sets.map { set -> UnsafeMutablePointer<UInt8> in
-            let p = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
-            set.copyBytes(to: p, count: set.count)
-            return p
-        }
-        defer { buffers.forEach { $0.deallocate() } }
-        let pointers = buffers.map { UnsafePointer($0) }
-        let sizes = ps.sets.map(\.count)
-
-        var desc: CMVideoFormatDescription?
-        let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-            allocator: nil, parameterSetCount: pointers.count, parameterSetPointers: pointers,
-            parameterSetSizes: sizes, nalUnitHeaderLength: Int32(ps.nalUnitHeaderLength),
-            extensions: nil, formatDescriptionOut: &desc)
-        guard status == noErr, let desc else { print("format description failed: \(status)"); return }
+        guard let desc = Self.makeFormatDescription(ps) else { return }
         formatDescription = desc
         waitingForKeyframe = true
         let dimensions = CMVideoFormatDescriptionGetDimensions(desc)
@@ -307,6 +293,27 @@ final class HEVCDisplayView: UIView {
         // Remove the last frame too: switching sources should show black until the new keyframe,
         // not the previous window frozen in place.
         displayLayer.flushAndRemoveImage()
+    }
+
+    /// Shared with visionOS source geometry. Repeated parameter sets can identify a new
+    /// source even when the display layer legitimately keeps its identical format.
+    static func makeFormatDescription(_ ps: ParameterSets) -> CMVideoFormatDescription? {
+        let buffers = ps.sets.map { set -> UnsafeMutablePointer<UInt8> in
+            let p = UnsafeMutablePointer<UInt8>.allocate(capacity: set.count)
+            set.copyBytes(to: p, count: set.count)
+            return p
+        }
+        defer { buffers.forEach { $0.deallocate() } }
+        let pointers = buffers.map { UnsafePointer($0) }
+        let sizes = ps.sets.map(\.count)
+
+        var desc: CMVideoFormatDescription?
+        let status = CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+            allocator: nil, parameterSetCount: pointers.count, parameterSetPointers: pointers,
+            parameterSetSizes: sizes, nalUnitHeaderLength: Int32(ps.nalUnitHeaderLength),
+            extensions: nil, formatDescriptionOut: &desc)
+        guard status == noErr, let desc else { print("format description failed: \(status)"); return nil }
+        return desc
     }
 
     /// Session over: drop the picture and forget the format so the next Mac starts clean.
