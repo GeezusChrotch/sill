@@ -795,6 +795,9 @@ extension StreamClient {
     /// A sill://pair link from outside the app: shown for confirmation, never acted on by itself (a
     /// poster or a message could otherwise add a look-alike "Mac" that collects keystrokes).
     func handleOpenURL(_ url: URL) {
+        #if os(visionOS)
+        if VisionSessionPolicy.isLaunchURL(url) { return }
+        #endif
         guard url.scheme?.lowercased() == "sill" else { return }
         switch PairLink.parse(url.absoluteString) {
         case .success(let link):

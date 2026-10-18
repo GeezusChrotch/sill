@@ -41,6 +41,17 @@ client does not scan camera codes. A development-signed Mac host may require
 fresh Screen Recording/Accessibility grants and pairing, since its identity and
 keychain access can differ from the released app.
 
+## Deep links
+
+Open the native visionOS app with `sill://` or `sill://open` (an optional trailing
+slash is accepted). These launch links leave the current connection, selected
+source and pending pairing confirmation unchanged. They accept no query,
+fragment, credentials or port.
+
+Existing `sill://pair?...` links still show the pairing confirmation before any
+pairing action. Invalid pairing links still report a pairing error. Launch links
+do not connect to a Mac or run remote commands.
+
 ## Implementation and compatibility
 
 `SillVisionApp` → `VisionSessionView` → shared `ContentView` is the active UI.
