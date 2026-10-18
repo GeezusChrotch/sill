@@ -335,6 +335,9 @@ struct HostSettingsPanel: View {
             }
             // After everything of the Mac's, whatever state its settings are in: while they load, and
             // for a Mac without them too. Both are this device's own: its gestures, then the tour.
+            #if os(visionOS)
+            spatialModeHelp
+            #endif
             thisDevice
             tour
         }
@@ -462,6 +465,27 @@ struct HostSettingsPanel: View {
     static func turnOnRemoteAccess(_ mac: String) -> String {
         "To reach \(mac) away from home, turn on Remote Access in Sill’s Settings on the Mac."
     }
+
+    #if os(visionOS)
+    /// Instructions live in the active Settings scroll area, away from toolbar hover targets.
+    private var spatialModeHelp: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Touch and Mouse")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Palette.muted)
+                .accessibilityAddTraits(.isHeader)
+            Text("Switch modes with Touch/Mouse in the left toolbar.")
+            Text("Touch: tap targets the picture; pinch-drag scrolls.")
+            Text("Mouse: pinch-drag moves the pointer; tap clicks it. Switching windows centres the pointer. Hold, then move to drag; hold and release to right-click. Switch to Touch to scroll.")
+        }
+        .font(.footnote)
+        .foregroundStyle(Palette.text)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+    #endif
 
     // MARK: This device
 

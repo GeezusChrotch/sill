@@ -52,6 +52,14 @@ enum VisionSurfaceInputPolicy {
     }
 }
 
+/// Pointer delivery is deliberately allowed in non-key windows; keyboard delivery is not.
+/// A scene may remain visible and the process active while another app owns typing.
+enum VisionKeyboardFocusPolicy {
+    static func canActivate(allowed: Bool, keyWindow: Bool, sceneActive: Bool) -> Bool {
+        allowed && keyWindow && sceneActive
+    }
+}
+
 /// Invalidates queued focus restoration when a newer request, cancellation or context wins.
 struct VisionKeyboardRestorePolicy {
     struct Ticket: Equatable { let generation: Int; let automatic: Bool }
@@ -196,9 +204,9 @@ struct VisionMouseModeButton: View {
         }
         .accessibilityValue(client.visionMouseMode ? "On" : "Off, Touch mode")
         .accessibilityAddTraits(client.visionMouseMode ? .isSelected : [])
-        .help(client.visionMouseMode
-              ? "Mouse: pinch-drag moves the pointer; tap clicks it. Switching windows centres the pointer. Hold, then move to drag; hold and release to right-click. Switch to Touch to scroll."
-              : "Touch: tap targets the picture; pinch-drag scrolls. Turn on Mouse mode for precise relative movement.")
+        .accessibilityHint(client.visionMouseMode
+                            ? "Switch to Touch mode. Instructions are in Settings."
+                            : "Switch to Mouse mode. Instructions are in Settings.")
     }
 }
 #endif

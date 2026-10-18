@@ -1131,7 +1131,11 @@ struct StreamScreen: View {
                   client.connected, client.connectedAt == session, client.active == source else { return }
             #if os(visionOS)
             guard overlay.focusEpoch == focus else { return }
-            if let confirmedToken, !client.isCurrentEditableFocusActivation(confirmedToken) { return }
+            if let confirmedToken {
+                guard client.isCurrentEditableFocusActivation(confirmedToken) else { return }
+                overlay.showKeyboardForEditableFocus()
+                return
+            }
             #endif
             overlay.setKeyboard(shown: true)
         }

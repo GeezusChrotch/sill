@@ -231,6 +231,13 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         #if os(visionOS)
         focusObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main) { [weak self] _ in self?.releaseSpatialFocus() })
+        // A visionOS scene can lose keyboard focus while another Sill scene keeps the
+        // application active. Observe this view's scene, rather than process state alone.
+        focusObservers.append(NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification,
+            object: nil, queue: .main) { [weak self] note in
+                guard let self, let scene = note.object as? UIScene, scene === self.window?.windowScene else { return }
+                self.releaseSpatialFocus()
+            })
         focusObservers.append(NotificationCenter.default.addObserver(forName: UIWindow.didResignKeyNotification,
             object: nil, queue: .main) { [weak self] note in
                 guard let self, let lost = note.object as? UIWindow, lost === self.window else { return }
@@ -240,11 +247,26 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
 
     #if os(visionOS)
+    fileprivate var spatialKeyboardWindowActive: Bool {
+        VisionKeyboardFocusPolicy.canActivate(allowed: spatialGate.allowed,
+            keyWindow: window?.isKeyWindow == true,
+            sceneActive: window?.windowScene?.activationState == .foregroundActive
+                && UIApplication.shared.applicationState == .active)
+    }
+    private var acceptsSpatialKeyboardInput: Bool { spatialKeyboardWindowActive && isFirstResponder }
+
     private func releaseSpatialFocus() {
-        cancelRemoteKeyboardRequest()
-        keyboardProxy?.focusEpoch = UUID()
         cancelPendingSpatialKeyboard()
-        keyboardProxy?.setKeyboard(shown: false)
+        // A departing layout may share a proxy with its replacement. Its teardown
+        // releases only its own responder and old destination, never the new view.
+        if keyboardProxy?.view === self {
+            cancelRemoteKeyboardRequest()
+            keyboardProxy?.focusEpoch = UUID()
+            keyboardProxy?.setKeyboard(shown: false)
+        }
+        // UIKit and the proxy can briefly disagree during a window transition. Release
+        // the actual responder even when policy already believes its hold is gone.
+        if isFirstResponder { _ = resignFirstResponder() }
         cancelSpatialInput()
     }
     deinit { focusObservers.forEach(NotificationCenter.default.removeObserver) }
@@ -605,6 +627,9 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        #if os(visionOS)
+        if window == nil { releaseSpatialFocus() }
+        #endif
         if window == nil { momentum.stop(); releaseForwardedKeys() }
         // A session's start, a rotation's other layout, a reconnect's new screen: the proxy takes the
         // keyboard for a hardware keyboard (on the next turn, once this view is settled in the window).
@@ -862,6 +887,9 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     // Either way the latch is spent afterwards: it is a one-shot, like a sticky key.
 
     func insertText(_ text: String) {
+        #if os(visionOS)
+        guard acceptsSpatialKeyboardInput else { releaseSpatialFocus(); return }
+        #endif
         setOwnPointer(nil, .none)
         if !latchedModifiers.isDisjoint(with: .shortcutMakers), text.count == 1,
            let character = text.first, let usage = HIDKey.usage(for: character) {
@@ -873,6 +901,9 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
 
     func deleteBackward() {
+        #if os(visionOS)
+        guard acceptsSpatialKeyboardInput else { releaseSpatialFocus(); return }
+        #endif
         setOwnPointer(nil, .none)
         if !latchedModifiers.isDisjoint(with: .shortcutMakers) {
             sendLatched(HIDKey.deleteBackward)
@@ -998,7 +1029,12 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// own window's: Settings open in another Sill window, behind this one, never sees a key pressed
     /// here. A leaf view is in the responder chain only while it is first responder, so this says again
     /// what the chain does.
-    private var takesEscape: Bool { isFirstResponder && !EscapeKey.onScreen(in: window) }
+    private var takesEscape: Bool {
+        #if os(visionOS)
+        guard acceptsSpatialKeyboardInput else { return false }
+        #endif
+        return isFirstResponder && !EscapeKey.onScreen(in: window)
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         guard takesEscape else { return super.keyCommands }
@@ -1066,6 +1102,12 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private var forwarded = ForwardedKeys()
 
     private func forward(_ presses: Set<UIPress>, down: Bool, via channel: String) -> Set<UIPress> {
+        #if os(visionOS)
+        guard acceptsSpatialKeyboardInput else {
+            releaseSpatialFocus()
+            return presses
+        }
+        #endif
         var unhandled: Set<UIPress> = []
         for press in presses {
             guard let key = press.key else { unhandled.insert(press); continue }
@@ -1143,6 +1185,12 @@ final class InputOverlayProxy {
     #if os(visionOS)
     var focusEpoch = UUID()
     var spatialTarget: (context: SpatialInputContext, point: CGPoint)?
+    /// Remote editable-focus confirmation is automatic: it may show the keyboard only
+    /// in a window that already owns focus. It must never make a background window key.
+    func showKeyboardForEditableFocus() {
+        guard view?.spatialKeyboardWindowActive == true else { return }
+        setKeyboard(shown: true)
+    }
     func rightClick(client: StreamClient) {
         guard let target = spatialTarget, client.connected, view?.window?.isKeyWindow == true,
               UIApplication.shared.applicationState == .active,

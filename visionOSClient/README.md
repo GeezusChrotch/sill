@@ -167,6 +167,10 @@ lock returns it to Auto. Open panels, window actions and VoiceOver keep both bar
 while needed. Pinned open remains visible through remote input. There is no separate
 Controls gear/tray, and ornament reveal does not change the picture's layout or aspect ratio.
 
+The Touch/Mouse button switches mode immediately. Its complete gesture instructions are
+in the active shared Settings panel’s scroll area under “Touch and Mouse”; it does not show an automatic hover tooltip over the
+left controls. VoiceOver keeps a short action hint naming the next mode.
+
 On visionOS 26+, one scene-local `HoverEffectGroup` controls both bars. A no-op hover effect
 on the content surface uses `preservesGroup`: looking back at the picture keeps an already
 revealed group active without revealing an inactive one. In Auto, an accepted remote click,

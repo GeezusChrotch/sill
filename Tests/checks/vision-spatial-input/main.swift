@@ -31,6 +31,22 @@ for event in events + releases {
     expect(!accepted(true, other, true, .desktop), "old session never reaches replacement")
     expect(!accepted(true, session, false, .desktop), "disconnected never sends")
 }
+// A visible, active scene is insufficient: remote text requests cannot take the
+// shared keyboard until this particular window is key. Pointer policy remains separate.
+for allowed in [false, true] {
+    for keyWindow in [false, true] {
+        for sceneActive in [false, true] {
+            expect(VisionKeyboardFocusPolicy.canActivate(allowed: allowed,
+                keyWindow: keyWindow, sceneActive: sceneActive) == (allowed && keyWindow && sceneActive),
+                "keyboard activation requires local input permission, own key window and active scene")
+        }
+    }
+}
+expect(!VisionKeyboardFocusPolicy.canActivate(allowed: true, keyWindow: false, sceneActive: true),
+       "another app's focus blocks keyboard even while Sill's scene remains active")
+expect(VisionSurfaceInputPolicy.showsPointer(source: .desktop, allowed: true, attached: true, foreground: true),
+       "keyboard focus exclusion does not remove accepted non-key spatial pointer feedback")
+
 var restore = VisionKeyboardRestorePolicy()
 restore.request(automatic: false)
 let first = restore.dequeue()!
