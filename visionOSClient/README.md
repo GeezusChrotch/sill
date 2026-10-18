@@ -146,24 +146,26 @@ when its catalog is unchanged; selections made during a stream switch wait for i
 During normal streaming, window previews and Desktop share the top bar. Apps, Mac menus,
 text size, Touch/Mouse, Keyboard, Settings and a lock button occupy a vertical bar on the left.
 Both bars are native ornaments outside the picture, so reveal and collapse do not resize the stream.
-Both bars sit 24 points from the window. The lock stays at the top of the left bar; its
-other controls scroll vertically when the scene is short, while previews scroll horizontally.
-Window actions and text size retain native popovers. The guided tour temporarily retains
-its full inline toolbar so its spotlight targets share the scene coordinate space.
+Both bars sit 12 points from the window. The lock is the last control, immediately after
+Settings in the left bar's scrolling stack; there is no fixed top slot or large spacer.
+Window previews scroll horizontally. Window actions and text size retain native popovers.
+The guided tour temporarily retains its full inline toolbar so its spotlight targets share
+the scene coordinate space.
 
-The 0.23 candidate uses an explicit hover-effect content shape on each complete bar and
-compositor opacity to attempt revealing both through their shared hover group. No separate
-visible target remains while hidden. This replaces build 22's zero-size visual clip and clear
-background target, which the owner reported could not reveal either bar on hardware. Invisible
-gaze activation is still a headset acceptance gate; compilation does not establish that it works. The left bar's lock button switches
-between pinned open and Auto; clicking again returns to Auto. Its icon shows an open lock
-in Auto and a closed lock when pinned. Each stream-screen appearance starts pinned open,
-even if a previous scene stored Auto. Returning after an actual background phase also pins both
-open; ordinary inactive/focus/keyboard transitions do not. If invisible reveal fails, close and
-reopen the Sill window to recover the controls, then leave the lock closed. Open panels, window
-actions and VoiceOver keep both bars visible while needed. Pinned open remains visible
-through remote input until the lock button returns to Auto. There is no pill or separate
-Controls gear/tray.
+In Auto, a visible frosted horizontal pill sits at the top and a vertical pill sits on the
+left, centered inside each future bar's footprint. Looking at either pill activates the
+shared hover group. Both bars fade over the pills in the same native ornament ZStacks;
+the pills fade out as the bars appear. The pills have no icon, text or tap action. Their
+nonzero frosted surfaces use native hover highlight, with explicit hover content shapes.
+Actual gaze transitions remain a physical headset acceptance check.
+
+The left bar's last lock button switches between pinned open and Auto. Its icon shows an
+open lock in Auto and a closed lock when pinned. The choice persists per scene, with Auto
+the default for a new scene. Build 23's forced appearance/background pinning is removed now
+that visible glance targets are present. A stored pinned choice remains pinned until the
+lock returns it to Auto. Open panels, window actions and VoiceOver keep both bars visible
+while needed. Pinned open remains visible through remote input. There is no separate
+Controls gear/tray, and ornament reveal does not change the picture's layout or aspect ratio.
 
 On visionOS 26+, one scene-local `HoverEffectGroup` controls both bars. A no-op hover effect
 on the content surface uses `preservesGroup`: looking back at the picture keeps an already

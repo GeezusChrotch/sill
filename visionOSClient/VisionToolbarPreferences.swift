@@ -8,15 +8,38 @@ struct VisionToolbarReveal: ViewModifier {
     let group: HoverEffectGroup
     func body(content: Content) -> some View {
         content
-            // Describe the hover participant itself before applying its compositor effect.
-            // A zero-size clip removes the bar's visual region; a separate clear view with an
-            // interaction shape did not restore gaze activation on build 22 hardware.
+            // Keep the bar's compositor fade separate from its visible glance target.
             .contentShape(.hoverEffect, Rectangle())
             .hoverEffect(in: group) { effect, active, _ in
                 effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
                     $0.opacity(!automatic || active ? 1 : 0)
                 }
             }
+    }
+}
+
+/// A real, nonzero frosted surface remains visible while Auto is collapsed. It shares
+/// the bars' hover group and sits inside the future bar footprint, rather than on a rail
+/// between the picture and toolbar. It is a glance target, with no tap action to compete
+/// with the controls above it in the ornament's hit-test hierarchy.
+struct VisionToolbarGlanceTarget: View {
+    let vertical: Bool
+    let reduceMotion: Bool
+    let group: HoverEffectGroup
+
+    var body: some View {
+        Capsule()
+            .fill(.clear)
+            .frame(width: vertical ? 24 : 72, height: vertical ? 72 : 24)
+            .glassBackgroundEffect(in: Capsule())
+            .contentShape(.hoverEffect, Capsule())
+            .hoverEffect(.highlight, in: group)
+            .hoverEffect(in: group) { effect, active, _ in
+                effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
+                    $0.opacity(active ? 0 : 1)
+                }
+            }
+            .accessibilityHidden(true)
     }
 }
 

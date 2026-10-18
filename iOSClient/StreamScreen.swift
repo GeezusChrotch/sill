@@ -103,10 +103,9 @@ enum DuoLayout {
 struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     #if os(visionOS)
-    @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = false
+    @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
-    @State private var spatialToolbarNeedsForegroundRecovery = false
     @Namespace private var spatialToolbarHoverNamespace
     @Environment(\.accessibilityVoiceOverEnabled) private var spatialVoiceOver
     @Environment(\.openWindow) private var openSpatialWindow
@@ -339,15 +338,7 @@ struct StreamScreen: View {
             #if os(visionOS)
             .onChange(of: client.active) { _, _ in spatialToolbarScrollActive = false }
             .onChange(of: client.connectedAt) { _, _ in spatialToolbarScrollActive = false }
-            .onChange(of: scenePhase) { _, phase in
-                spatialToolbarScrollActive = false
-                // Keyboard, popovers and focus changes may briefly make the scene inactive.
-                // Recover only after actual backgrounding, preserving Auto through those UI.
-                if phase == .background { spatialToolbarNeedsForegroundRecovery = true }
-                if phase == .active && spatialToolbarNeedsForegroundRecovery {
-                    recoverSpatialToolbars()
-                }
-            }
+            .onChange(of: scenePhase) { _, _ in spatialToolbarScrollActive = false }
             #endif
             #if DEBUG
             // The console's line for the gates: what Larger Picture's rule made of the switch and of
@@ -402,11 +393,6 @@ struct StreamScreen: View {
         .onChange(of: windowMenu) { _, menu in if menu != nil { setSettings(false) } }
         .ignoresSafeArea(edges: .bottom)
         .onAppear {
-            #if os(visionOS)
-            // Start recoverably even when SceneStorage restores Auto from an older build.
-            // The DEBUG launch override below can still exercise the hidden candidate.
-            recoverSpatialToolbars()
-            #endif
             // A fresh connection starts on the Desktop (the client asks for it as soon as the host
             // reports nothing streaming), so the drawer stays closed until the user opens it.
             sendViewport()
@@ -1174,28 +1160,34 @@ struct StreamScreen: View {
         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
             if tour == nil {
                 spatialTopToolbar(size: size, length: toolbarLength)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 12)
             }
         }
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
             if tour == nil {
                 spatialControlsBar(height: max(180, min(750, size.height)))
-                    .padding(.trailing, 24)
+                    .padding(.trailing, 12)
             }
         }
     }
 
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            spatialToolbar(sidebar: false, content: .previews).frame(width: length)
+        ZStack {
+            if spatialToolbarUsesHover {
+                VisionToolbarGlanceTarget(vertical: false, reduceMotion: reduceMotion,
+                                         group: spatialToolbarHoverGroup)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                spatialToolbar(sidebar: false, content: .previews).frame(width: length)
+            }
+            .frame(width: size.width, height: BarMetrics.regular.height)
+            .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
+                spatialSidebarWindowMenu
+            }
+            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                          group: spatialToolbarHoverGroup))
         }
-        .frame(width: size.width, height: BarMetrics.regular.height)
-        .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
-            spatialSidebarWindowMenu
-        }
-        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
-                                      group: spatialToolbarHoverGroup))
         .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
@@ -1220,17 +1212,19 @@ struct StreamScreen: View {
     }
 
     private func spatialControlsBar(height: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            spatialVisibilityButton
-                .padding(8)
+        ZStack {
+            if spatialToolbarUsesHover {
+                VisionToolbarGlanceTarget(vertical: true, reduceMotion: reduceMotion,
+                                         group: spatialToolbarHoverGroup)
+            }
             ScrollView(.vertical, showsIndicators: false) {
                 spatialToolbar(sidebar: true, content: .controls)
             }
+            .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
+            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                          group: spatialToolbarHoverGroup))
         }
-        .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
-        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
-                                      group: spatialToolbarHoverGroup))
         .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
@@ -1242,14 +1236,8 @@ struct StreamScreen: View {
                setSettings: { setSettings($0, restoreKeyboard: $1) },
                menusOpened: menusOpened, menusClosed: menusClosed,
                keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() }, overlay: overlay,
-               vertical: sidebar, thumbnailHeight: thumbnailHeight, content: content)
-    }
-
-    private func recoverSpatialToolbars() {
-        spatialToolbarAutomatic = false
-        spatialToolbarScrollActive = false
-        spatialToolbarNeedsForegroundRecovery = false
-        spatialToolbarHoverGeneration += 1
+               vertical: sidebar, thumbnailHeight: thumbnailHeight, content: content,
+               visibilityButton: sidebar ? AnyView(spatialVisibilityButton) : nil)
     }
 
     private var spatialControlsPinned: Bool {
@@ -1274,7 +1262,7 @@ struct StreamScreen: View {
         }
         .hoverEffect(.highlight)
         .accessibilityValue(spatialToolbarAutomatic ? "Automatic" : "Pinned open")
-        .accessibilityHint("Look where either toolbar sits to reveal both. Activate to switch between pinned open and automatic visibility. If the bars cannot be revealed, close and reopen this Sill window to pin them open.")
+        .accessibilityHint("Look at either frosted pill to reveal both toolbars. Activate to switch between pinned open and automatic visibility.")
     }
 
     /// An explicit remote click, scroll or key starts control. Merely moving a
@@ -1575,6 +1563,7 @@ private struct TopBar: View {
     #if os(visionOS)
     enum Content { case all, previews, controls }
     var content: Content = .all
+    var visibilityButton: AnyView? = nil
     #endif
     private var showsControls: Bool {
         #if os(visionOS)
@@ -1697,6 +1686,9 @@ private struct TopBar: View {
                     .opacity(scaleOpen ? 0 : 1)
                     .allowsHitTesting(!scaleOpen)
                     .tourTarget(.settings)
+                #if os(visionOS)
+                if let visibilityButton { visibilityButton }
+                #endif
             }
         }
         .animation(.easeOut(duration: 0.16), value: scaleOpen)
