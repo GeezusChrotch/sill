@@ -129,7 +129,7 @@ with both released and updated hosts. No exhaustive matrix of these combinations
 has been completed, and no public visionOS release is claimed here.
 
 
-### Spatial windows and toolbar (0.19 candidate)
+### Spatial windows and toolbar (0.20 candidate)
 
 Each “Open as own window” scene owns the full Sill interface and a separate client. A scene value
 contains only a random UUID; its paired-host seed remains in memory for at most 60 seconds. A
@@ -142,6 +142,20 @@ retains the selected source through early empty catalogs for up to ten seconds, 
 connection error if the window remains unavailable. A later explicit app/window choice cancels
 that pending selection. Choosing an app with an existing window selects it immediately, including
 when its catalog is unchanged; selections made during a stream switch wait for it to finish.
+
+During normal streaming the rail contains window previews and one Controls gear. Looking at
+the gear reveals Apps, Mac menus, text size, Touch/Mouse, Keyboard, Desktop and Settings in a
+separate floating tray. Activating the gear keeps the tray open explicitly. Preview space and
+picture geometry do not change during reveal. The left rail retains its width-driven extended
+height; space previously occupied by controls now belongs to previews. The tray can scroll in
+narrow scenes, and VoiceOver exposes it without requiring gaze.
+
+The controls use a separate system hover group. Preview hover and preview window actions do not
+reveal the tray. Open control panels keep it visible; accepted remote input clears its explicit
+reveal and resets both hover groups. Moving into the tray preserves the already-visible rail on
+visionOS26+. No gaze state or coordinates enter application state. Actual gaze transitions and
+hidden-control hit testing remain device-acceptance checks. The guided tour retains the full
+inline toolbar for its existing spotlight targets.
 
 Toolbar position and Always show toolbar are saved per scene. The centered frosted pill has
 no visible symbol or text; gaze reveals its toolbar, and tapping it provides an accessible
@@ -182,6 +196,6 @@ especially for extreme aspect ratios. Mac apps with their own window-size limits
 viewer of an already fitted window can still produce a source frame with different dimensions;
 the renderer preserves the full image without cropping or stretching.
 
-Debug visual checks can use `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1` with the existing layout harness. The pure sizing check is
+Debug visual checks can use `-SillControls 1` for the explicitly revealed tray, `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1` with the existing layout harness. The pure sizing check is
 `Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input
 still require Vision Pro acceptance.

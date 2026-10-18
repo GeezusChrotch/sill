@@ -106,6 +106,7 @@ struct StreamScreen: View {
     @SceneStorage("Sill.spatialToolbarPosition") private var spatialToolbarPosition = "top"
     @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
     @State private var spatialToolbarPresented = false
+    @State private var spatialControlsPresented = false
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
     @Namespace private var spatialToolbarHoverNamespace
@@ -591,6 +592,12 @@ struct StreamScreen: View {
         if defaults.object(forKey: "SillToolbarAutomatic") != nil {
             spatialToolbarAutomatic = defaults.bool(forKey: "SillToolbarAutomatic")
         }
+        #if DEBUG
+        if defaults.bool(forKey: "SillControls") {
+            spatialControlsPresented = true
+            spatialToolbarPresented = true
+        }
+        #endif
         #endif
         let live = !client.mockDiscovery
         func after(_ seconds: Double, _ step: @escaping () -> Void) {
@@ -1145,13 +1152,18 @@ struct StreamScreen: View {
         HoverEffectGroup(id: "toolbar-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
     }
 
+    private var spatialControlsHoverGroup: HoverEffectGroup {
+        HoverEffectGroup(id: "controls-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
+    }
+
     private var spatialToolbarUsesHover: Bool {
         spatialToolbarAutomatic && !spatialToolbarPinned && !spatialToolbarPresented
     }
 
     private func spatialLayout(size: CGSize) -> some View {
         let sidebar = spatialToolbarPosition == "left" && tour == nil
-        let toolbarLength = max(750, size.width - 60)
+        let toolbarLength = tour == nil ? max(180, size.width - 60) : max(750, size.width - 60)
+        let sidebarLength = max(750, size.width - 60)
         // During the onboarding tour only, keep the original inline toolbar so its
         // target anchors share TourOverlay's scene coordinate space. This temporary
         // inset never requests a new scene geometry or changes the saved source ratio.
@@ -1161,6 +1173,7 @@ struct StreamScreen: View {
             }
             contentArea(bar: .regular)
                 .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+                .modifier(VisionToolbarPreserve(group: spatialControlsHoverGroup))
         }
         .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
         // Outside the tour all fixed-size controls live outside the scene, allowing
@@ -1174,11 +1187,10 @@ struct StreamScreen: View {
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
             if sidebar {
                 HStack(spacing: 8) {
-                    // Ornaments remain interactive beyond the scene's bounds. Give the
-                    // preview strip all space left after the fixed controls, up to the
-                    // same length used by the horizontal toolbar.
-                    spatialToolbar(sidebar: true, thumbnailHeight: max(100, toolbarLength - 570))
-                        .frame(width: 132, height: toolbarLength)
+                    // Only the gear shares the rail with previews. The separate tray
+                    // never reserves preview space or changes the picture geometry.
+                    spatialCompactRail(sidebar: true, length: sidebarLength)
+                        .frame(width: 132, height: sidebarLength)
                         .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .trailing) {
                             spatialSidebarWindowMenu
                         }
@@ -1191,13 +1203,29 @@ struct StreamScreen: View {
                 .padding(.trailing, 24)
             }
         }
+        .ornament(attachmentAnchor: .scene(sidebar ? .leading : .topTrailing), contentAlignment: sidebar ? .trailing : .bottomTrailing) {
+            if tour == nil {
+                spatialControlsTray(width: max(180, min(600, size.width - 48)))
+                    // Meet the stable gear from outside the rail. Expansion is entirely
+                    // compositor-driven; neither rail nor scene changes its layout.
+                    .padding(.trailing, sidebar ? 232 : 68)
+                    .padding(.bottom, sidebar ? 0 : 180)
+                    // Native ornaments clip visual offsets outside their intrinsic
+                    // bounds. Reserve the rail's height so the tray really lays out
+                    // beside its bottom gear instead of being translated out of view.
+                    .frame(height: sidebar ? sidebarLength : nil, alignment: .bottom)
+            }
+        }
     }
 
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
         VStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                spatialToolbar(sidebar: false)
-                    .frame(width: length)
+                if tour != nil {
+                    spatialToolbar(sidebar: false).frame(width: length)
+                } else {
+                    spatialCompactRail(sidebar: false, length: length)
+                }
             }
             .frame(width: size.width, height: BarMetrics.regular.height)
             .popover(isPresented: Binding(get: { tour == nil && windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
@@ -1231,7 +1259,40 @@ struct StreamScreen: View {
         }
     }
 
-    private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200) -> some View {
+    private func spatialCompactRail(sidebar: Bool, length: CGFloat) -> some View {
+        let layout = sidebar ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            spatialToolbar(sidebar: sidebar, thumbnailHeight: max(80, length - 106), content: .previews)
+            BarButton(open: spatialControlsPresented, width: BarMetrics.regular.buttonWidth,
+                      height: BarMetrics.regular.buttonHeight, accessibilityLabel: "Controls and Settings") {
+                spatialControlsPresented.toggle()
+                spatialToolbarPresented = true
+            } content: {
+                VStack(spacing: 4) {
+                    Image(systemName: "gearshape").font(.system(size: 22))
+                    Text("Controls").font(.system(size: 11, weight: .medium))
+                }
+            }
+            .hoverEffect(in: spatialControlsHoverGroup) { effect, _, _ in effect }
+            .accessibilityHint("Look to reveal controls, or activate to keep them open. Settings is in the controls tray.")
+        }
+        .padding(sidebar ? .vertical : .trailing, 8)
+        .frame(width: sidebar ? nil : length)
+    }
+
+    private func spatialControlsTray(width: CGFloat) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            spatialToolbar(sidebar: false, content: .controls)
+        }
+        .frame(width: width, height: BarMetrics.regular.height)
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+        .modifier(VisionToolbarReveal(automatic: !spatialControlsPinned && !spatialControlsPresented,
+                                      reduceMotion: reduceMotion, group: spatialControlsHoverGroup, anchor: .bottomTrailing))
+        .hoverEffectGroup(spatialControlsHoverGroup)
+        .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+    }
+
+    private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200, content: TopBar.Content = .all) -> some View {
         TopBar(client: client, metrics: .regular, drawerOpen: $drawerOpen,
                keyboardShown: $keyboardShown, textScale: $textScale, scaleOpen: $scaleOpen,
                windowMenu: $windowMenu, settingsOpen: settingsOpen, menusFit: true,
@@ -1239,11 +1300,15 @@ struct StreamScreen: View {
                setSettings: { setSettings($0, restoreKeyboard: $1) },
                menusOpened: menusOpened, menusClosed: menusClosed,
                keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() }, overlay: overlay,
-               vertical: sidebar, thumbnailHeight: thumbnailHeight)
+               vertical: sidebar, thumbnailHeight: thumbnailHeight, content: content)
+    }
+
+    private var spatialControlsPinned: Bool {
+        settingsOpen || drawerOpen || menusOpen || scaleOpen || keyboardToolsOpen || spatialVoiceOver
     }
 
     private var spatialToolbarPinned: Bool {
-        settingsOpen || drawerOpen || menusOpen || scaleOpen || keyboardToolsOpen || windowMenu != nil || tour != nil || spatialVoiceOver
+        spatialControlsPinned || windowMenu != nil || tour != nil
     }
 
     private func spatialVisibilityButton(sidebar: Bool) -> some View {
@@ -1290,6 +1355,7 @@ struct StreamScreen: View {
             }
             if controlling {
                 spatialToolbarPresented = false
+                spatialControlsPresented = false
                 spatialToolbarHoverGeneration += 1
             }
             send(event)
@@ -1561,117 +1627,147 @@ private struct TopBar: View {
     var vertical = false
     var thumbnailHeight: CGFloat = 200
     #if os(visionOS)
+    enum Content { case all, previews, controls }
+    var content: Content = .all
+    #endif
+    private var showsControls: Bool {
+        #if os(visionOS)
+        content != .previews
+        #else
+        true
+        #endif
+    }
+    private var showsPreviews: Bool {
+        #if os(visionOS)
+        content != .controls
+        #else
+        true
+        #endif
+    }
+    #if os(visionOS)
     @Environment(\.scenePhase) private var scenePhase
     #endif
 
     var body: some View {
         let arrangement = vertical ? AnyLayout(VStackLayout(spacing: metrics.gap)) : AnyLayout(HStackLayout(spacing: metrics.gap))
         arrangement {
-            button(open: drawerOpen, symbol: "magnifyingglass", label: "Apps",
-                   accessibilityLabel: drawerOpen ? "Close the app list" : "Open the app list",
-                   action: {
-                       setSettings(false, false)
-                       withAnimation(.easeOut(duration: 0.18)) { drawerOpen.toggle() }
-                   })
-
-            WindowStrip(client: client, width: metrics.thumbWidth, height: metrics.thumbHeight,
-                        radius: metrics.thumbRadius, spacing: metrics.thumbSpacing,
-                        pad: metrics.thumbPad, fade: metrics.thumbFade, menuFor: $windowMenu, vertical: vertical)
-                .opacity(scaleOpen ? 0.2 : 1)      // the ruler is centred on Aa and reaches over the strip's end
-                .allowsHitTesting(!scaleOpen)
-                .frame(width: vertical ? metrics.thumbWidth + 16 : stripWidth, height: vertical ? thumbnailHeight : nil)
-                #if os(visionOS)
-                .frame(minWidth: vertical ? nil : 160)
-                #endif
-                .tourTarget(.strip, inset: WindowStrip.tourBand(pad: metrics.thumbPad))
-            // The book pose: the fold's band, and nothing on it, between the strip and the buttons.
-            if stripWidth != nil { Spacer(minLength: 0) }
-
-            // The Mac's menus of the streamed app, next to the thumbnails because they are the picked
-            // window's app's. Only while the Mac sent some, and where the bar holds it: with none the
-            // strip takes its room back.
-            if client.menus.hasMenus, menusFit {
-                MacMenuButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight,
-                              spacing: metrics.buttonSpacing, onOpen: menusOpened, onClose: menusClosed)
-                    .opacity(scaleOpen ? 0 : 1)    // under the Aa ruler, as the buttons after Aa
-                    .allowsHitTesting(!scaleOpen)
-                    .transition(.opacity)
+            if showsControls {
+                button(open: drawerOpen, symbol: "magnifyingglass", label: "Apps",
+                       accessibilityLabel: drawerOpen ? "Close the app list" : "Open the app list",
+                       action: {
+                           setSettings(false, false)
+                           withAnimation(.easeOut(duration: 0.18)) { drawerOpen.toggle() }
+                       })
             }
-
-            // Text size: the host sizes the Mac window to the panel divided by this scale, so a
-            // bigger number means a smaller Mac window and bigger text here. The slider unfolds to
-            // the right, over the two buttons after it, which fade while it is open.
-            #if os(visionOS)
-            // A gaze-and-pinch activation must leave the picker open after release. The iPad's
-            // press-and-drag ruler closes on gesture end and also competes with the top scroll view.
-            button(open: scaleOpen, symbol: "textformat.size", label: "Text size",
-                   accessibilityLabel: "Text size in this window") { scaleOpen.toggle() }
-                .popover(isPresented: $scaleOpen, arrowEdge: vertical ? .trailing : .top) {
-                    VisionTextSizePicker(scale: $textScale)
+            if showsPreviews {
+                WindowStrip(client: client, width: metrics.thumbWidth, height: metrics.thumbHeight,
+                            radius: metrics.thumbRadius, spacing: metrics.thumbSpacing,
+                            pad: metrics.thumbPad, fade: metrics.thumbFade, menuFor: $windowMenu, vertical: vertical)
+                    .opacity(scaleOpen ? 0.2 : 1)      // the ruler is centred on Aa and reaches over the strip's end
+                    .allowsHitTesting(!scaleOpen)
+                    .frame(width: vertical ? metrics.thumbWidth + 16 : stripWidth, height: vertical ? thumbnailHeight : nil)
+                    #if os(visionOS)
+                    .frame(minWidth: vertical ? nil : content == .previews ? 60 : 160)
+                    #endif
+                    .tourTarget(.strip, inset: WindowStrip.tourBand(pad: metrics.thumbPad))
+                // The book pose: the fold's band, and nothing on it, between the strip and the buttons.
+                if stripWidth != nil { Spacer(minLength: 0) }
+            }
+            if showsControls {
+                // The Mac's menus of the streamed app, next to the thumbnails because they are the picked
+                // window's app's. Only while the Mac sent some, and where the bar holds it: with none the
+                // strip takes its room back.
+                if client.menus.hasMenus, menusFit {
+                    MacMenuButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight,
+                                  spacing: metrics.buttonSpacing, onOpen: menusOpened, onClose: menusClosed)
+                        .opacity(scaleOpen ? 0 : 1)    // under the Aa ruler, as the buttons after Aa
+                        .allowsHitTesting(!scaleOpen)
+                        .transition(.opacity)
                 }
-                .tourTarget(.textSize)
-            #else
-            TextScaleControl(scale: $textScale, open: $scaleOpen,
-                             width: metrics.buttonWidth, height: metrics.buttonHeight,
-                             pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
-                .tourTarget(.textSize)
 
-            #endif
-
-            #if os(visionOS)
-            VisionMouseModeButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight, spacing: metrics.buttonSpacing)
-                .opacity(scaleOpen ? 0 : 1)
-                .allowsHitTesting(!scaleOpen)
-            #endif
-            button(open: keyboardShown, symbol: "keyboard", label: "Keyboard",
-                   accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
-                   action: keyboardTapped)
+                // Text size: the host sizes the Mac window to the panel divided by this scale, so a
+                // bigger number means a smaller Mac window and bigger text here. The slider unfolds to
+                // the right, over the two buttons after it, which fade while it is open.
                 #if os(visionOS)
-                .visionKeyboardToolsGesture(tap: keyboardTapped) {
-                    client.cancelRemoteKeyboardRequest()
-                    setSettings(false, false)
-                    keyboardTools = true
-                }
-                .popover(isPresented: $keyboardTools) {
-                    VisionKeyboardTools(client: client, shown: keyboardShown, overlay: overlay) {
-                        keyboardTools = false
-                        showKeyboard()
+                // A gaze-and-pinch activation must leave the picker open after release. The iPad's
+                // press-and-drag ruler closes on gesture end and also competes with the top scroll view.
+                button(open: scaleOpen, symbol: "textformat.size", label: "Text size",
+                       accessibilityLabel: "Text size in this window") { scaleOpen.toggle() }
+                    .popover(isPresented: $scaleOpen, arrowEdge: vertical ? .trailing : .top) {
+                        VisionTextSizePicker(scale: $textScale)
                     }
-                }
-                .onChange(of: client.active) { _, _ in keyboardTools = false }
-                .onChange(of: client.connectedAt) { _, _ in keyboardTools = false }
-                .onChange(of: scenePhase) { _, phase in
-                    if phase != .active { keyboardTools = false }
-                }
+                    .tourTarget(.textSize)
+                #else
+                TextScaleControl(scale: $textScale, open: $scaleOpen,
+                                 width: metrics.buttonWidth, height: metrics.buttonHeight,
+                                 pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
+                    .tourTarget(.textSize)
+
                 #endif
-                .opacity(scaleOpen ? 0 : 1)
-                .allowsHitTesting(!scaleOpen)
-                .tourTarget(.keyboard)
 
-            button(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop",
-                   accessibilityLabel: "Show the full Mac desktop",
-                   action: { client.select(.desktop) })
-                .opacity(scaleOpen ? 0 : 1)
-                .allowsHitTesting(!scaleOpen)
+                #if os(visionOS)
+                VisionMouseModeButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight, spacing: metrics.buttonSpacing)
+                    .opacity(scaleOpen ? 0 : 1)
+                    .allowsHitTesting(!scaleOpen)
+                #endif
+                button(open: keyboardShown, symbol: "keyboard", label: "Keyboard",
+                       accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+                       action: keyboardTapped)
+                    #if os(visionOS)
+                    .visionKeyboardToolsGesture(tap: keyboardTapped) {
+                        client.cancelRemoteKeyboardRequest()
+                        setSettings(false, false)
+                        keyboardTools = true
+                    }
+                    .popover(isPresented: $keyboardTools) {
+                        VisionKeyboardTools(client: client, shown: keyboardShown, overlay: overlay) {
+                            keyboardTools = false
+                            showKeyboard()
+                        }
+                    }
+                    .onChange(of: client.active) { _, _ in keyboardTools = false }
+                    .onChange(of: client.connectedAt) { _, _ in keyboardTools = false }
+                    .onChange(of: scenePhase) { _, phase in
+                        if phase != .active { keyboardTools = false }
+                    }
+                    #endif
+                    .opacity(scaleOpen ? 0 : 1)
+                    .allowsHitTesting(!scaleOpen)
+                    .tourTarget(.keyboard)
 
-            // Leave's old slot: Disconnect is the Settings panel's pinned last row now.
-            button(open: settingsOpen, symbol: "gearshape", label: "Settings",
-                   accessibilityLabel: settingsOpen ? "Close settings" : "Settings for \(client.macName.isEmpty ? "the Mac" : client.macName)",
-                   action: { setSettings(!settingsOpen, true) })
-                .opacity(scaleOpen ? 0 : 1)
-                .allowsHitTesting(!scaleOpen)
-                .tourTarget(.settings)
+                button(open: client.active == .desktop, symbol: "desktopcomputer", label: "Desktop",
+                       accessibilityLabel: "Show the full Mac desktop",
+                       action: { client.select(.desktop) })
+                    .opacity(scaleOpen ? 0 : 1)
+                    .allowsHitTesting(!scaleOpen)
+
+                // Leave's old slot: Disconnect is the Settings panel's pinned last row now.
+                button(open: settingsOpen, symbol: "gearshape", label: "Settings",
+                       accessibilityLabel: settingsOpen ? "Close settings" : "Settings for \(client.macName.isEmpty ? "the Mac" : client.macName)",
+                       action: { setSettings(!settingsOpen, true) })
+                    .opacity(scaleOpen ? 0 : 1)
+                    .allowsHitTesting(!scaleOpen)
+                    .tourTarget(.settings)
+            }
         }
         .animation(.easeOut(duration: 0.16), value: scaleOpen)
         .animation(.easeOut(duration: 0.18), value: client.menus.hasMenus)
         .frame(height: vertical ? nil : metrics.height)
-        .padding(.horizontal, vertical ? 8 : metrics.padding)
+        .padding(.horizontal, toolbarHorizontalPadding)
         .padding(.vertical, vertical ? 8 : 0)
         // The bar's colour runs to the screen edge; its contents stay inside the safe area.
         #if os(visionOS)
         .background(.clear)
         #else
         .background(Palette.bar.ignoresSafeArea(edges: .top))
+        #endif
+    }
+
+    private var toolbarHorizontalPadding: CGFloat {
+        #if os(visionOS)
+        vertical || content == .previews ? 8 : metrics.padding
+        #else
+        vertical ? 8 : metrics.padding
         #endif
     }
 

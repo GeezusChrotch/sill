@@ -28,11 +28,12 @@ struct VisionToolbarReveal: ViewModifier {
     let automatic: Bool
     let reduceMotion: Bool
     let group: HoverEffectGroup
+    var anchor: UnitPoint = .topTrailing
 
     func body(content: Content) -> some View {
         content.hoverEffect(in: group) { effect, active, proxy in
             effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
-                $0.clipShape(VisionToolbarRevealShape(size: !automatic || active ? proxy.size : .zero))
+                $0.clipShape(VisionToolbarRevealShape(size: !automatic || active ? proxy.size : .zero, anchor: anchor))
             }
         }
     }
@@ -40,13 +41,16 @@ struct VisionToolbarReveal: ViewModifier {
 
 private struct VisionToolbarRevealShape: Shape {
     var size: CGSize
+    let anchor: UnitPoint
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(size.width, size.height) }
         set { size = CGSize(width: newValue.first, height: newValue.second) }
     }
 
     func path(in rect: CGRect) -> Path {
-        Path(CGRect(x: rect.maxX - size.width, y: rect.minY, width: size.width, height: size.height))
+        Path(CGRect(x: rect.minX + (rect.width - size.width) * anchor.x,
+                    y: rect.minY + (rect.height - size.height) * anchor.y,
+                    width: size.width, height: size.height))
     }
 }
 
