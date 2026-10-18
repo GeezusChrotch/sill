@@ -23,6 +23,7 @@
 		3E9A251BA52671295F108FF1 /* MessageReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 976EA5075BB7218CBFE4A908 /* MessageReader.swift */; };
 		3ED3CE76D599FDB3B8BE2390 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3B5062D86723DC407F1BE215 /* Assets.xcassets */; };
 		403698CC053619B9621B2E71 /* VisionMacMenus.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABD672B19E0C7D08999A955D /* VisionMacMenus.swift */; };
+		47CEE57C9ADA4FE7E431657F /* VisionGeometryDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B1AD288FA5ADD7FCDDFA67 /* VisionGeometryDiagnostics.swift */; };
 		566F6ED4F751FB2574FA7D3C /* HEVCDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B679A2CB47172A9ECC57010 /* HEVCDisplayView.swift */; };
 		58F71FA7AEA5FFBCB37200DD /* VisionInputGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = F74769F3E7592C6A93F1DB91 /* VisionInputGeometry.swift */; };
 		596DADFAD644BF560F439DA6 /* VisionKeyboardCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 565954CD75D37C9D30BA08AC /* VisionKeyboardCapture.swift */; };
@@ -66,6 +67,7 @@
 		DCA8B03CF7752D06621A88B3 /* PairingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB68AA4F8E7CF0A1E69166E4 /* PairingOverlay.swift */; };
 		DD2643E5D72B15EF64C07FEF /* RemoteDialPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849BE7AE46C5F454B262F78A /* RemoteDialPolicy.swift */; };
 		EAF87C0CE499C5F04DE733A3 /* VisionSceneSessionLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D5579DD67C58BD8FA56F371 /* VisionSceneSessionLifecycle.swift */; };
+		EB8946E87C07F13A73AC88F9 /* VisionNativeGeometryFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29BC0C842059723948EFBEA3 /* VisionNativeGeometryFixture.swift */; };
 		ED21B1B77AB4AC0123F36190 /* MacMenuElements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9331C430091BA2888E9C9112 /* MacMenuElements.swift */; };
 		EFB70F863535B42E5D5A6DBE /* SavedMacs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49197449FFAC0F939E674EAC /* SavedMacs.swift */; };
 		F2D9FF99D05C395861775FDA /* SillLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D78C12278C1769068E1314 /* SillLinks.swift */; };
@@ -81,6 +83,7 @@
 		01B8EBE2CBEF519F3A940282 /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		0232F17EB5E0852D3B5403A7 /* MacMenuHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenuHub.swift; sourceTree = "<group>"; };
 		02573DF8DD05A951D810111E /* MacMenuState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenuState.swift; sourceTree = "<group>"; };
+		059D92F6A1F4873BCF5DD191 /* SillVision */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SillVision; path = ..; sourceTree = SOURCE_ROOT; };
 		06550E4143B0BA62871A23A6 /* VisionMacMenuButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionMacMenuButton.swift; sourceTree = "<group>"; };
 		08AA3B3798EB105400FBC4E4 /* StreamClient+Clipboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StreamClient+Clipboard.swift"; sourceTree = "<group>"; };
 		0B679A2CB47172A9ECC57010 /* HEVCDisplayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HEVCDisplayView.swift; sourceTree = "<group>"; };
@@ -93,6 +96,7 @@
 		1BF83D777BEEC5E5313D18F3 /* TourPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourPolicy.swift; sourceTree = "<group>"; };
 		20B0D4400FBC497A82659574 /* DuoPosture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuoPosture.swift; sourceTree = "<group>"; };
 		2233A1492A3C4B609D9E85E1 /* PhonePortraitLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhonePortraitLayout.swift; sourceTree = "<group>"; };
+		29BC0C842059723948EFBEA3 /* VisionNativeGeometryFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionNativeGeometryFixture.swift; sourceTree = "<group>"; };
 		312AC885D30CA344D19CA5F9 /* VisionSessionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSessionPolicy.swift; sourceTree = "<group>"; };
 		328C346EAF315978A74FE24C /* VisionHardwarePointer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionHardwarePointer.swift; sourceTree = "<group>"; };
 		33D78C12278C1769068E1314 /* SillLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SillLinks.swift; sourceTree = "<group>"; };
@@ -104,8 +108,8 @@
 		4A47ED9CEBA240FDEB3E0ABD /* StreamClient+Viewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StreamClient+Viewport.swift"; sourceTree = "<group>"; };
 		565954CD75D37C9D30BA08AC /* VisionKeyboardCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionKeyboardCapture.swift; sourceTree = "<group>"; };
 		590E81606E56D8A684C550E9 /* StreamClient+Home.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StreamClient+Home.swift"; sourceTree = "<group>"; };
-		595EFC794506BDA42A3B213D /* sill-spatial-ui */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "sill-spatial-ui"; path = ..; sourceTree = SOURCE_ROOT; };
 		5A99AC56A9DD31B5847D548D /* PointerPresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointerPresence.swift; sourceTree = "<group>"; };
+		61B1AD288FA5ADD7FCDDFA67 /* VisionGeometryDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionGeometryDiagnostics.swift; sourceTree = "<group>"; };
 		65937F3D3E5B38C209BD7EC5 /* GoodbyePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoodbyePolicy.swift; sourceTree = "<group>"; };
 		6C88405D735A1C4DDA0C047E /* TrackpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadView.swift; sourceTree = "<group>"; };
 		6D5579DD67C58BD8FA56F371 /* VisionSceneSessionLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSceneSessionLifecycle.swift; sourceTree = "<group>"; };
@@ -236,6 +240,7 @@
 				A3F3D5B07DA8CE8A1252E741 /* Info.plist */,
 				E9BFCDA222808ECA106A9C53 /* SillVisionApp.swift */,
 				13A7899ADE679D08687B8139 /* VisionAppLauncher.swift */,
+				61B1AD288FA5ADD7FCDDFA67 /* VisionGeometryDiagnostics.swift */,
 				328C346EAF315978A74FE24C /* VisionHardwarePointer.swift */,
 				D86FF44EAA4B1292C9D788D4 /* VisionHelp.swift */,
 				B56A7D8293BD4D42F4A4F6E4 /* VisionHIDKey.swift */,
@@ -244,6 +249,7 @@
 				565954CD75D37C9D30BA08AC /* VisionKeyboardCapture.swift */,
 				06550E4143B0BA62871A23A6 /* VisionMacMenuButton.swift */,
 				ABD672B19E0C7D08999A955D /* VisionMacMenus.swift */,
+				29BC0C842059723948EFBEA3 /* VisionNativeGeometryFixture.swift */,
 				6D5579DD67C58BD8FA56F371 /* VisionSceneSessionLifecycle.swift */,
 				95C450623F0B26231BF3375F /* VisionScrollMomentum.swift */,
 				312AC885D30CA344D19CA5F9 /* VisionSessionPolicy.swift */,
@@ -264,7 +270,7 @@
 		CC5766CCEF06C39E88F016CC /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				595EFC794506BDA42A3B213D /* sill-spatial-ui */,
+				059D92F6A1F4873BCF5DD191 /* SillVision */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -389,6 +395,7 @@
 				7E962EE89351795E734E11DD /* TrackpadGestures.swift in Sources */,
 				8C2155EDB731D3EBB72604F3 /* TrackpadView.swift in Sources */,
 				66659A9A3D3984A57765A1BA /* VisionAppLauncher.swift in Sources */,
+				47CEE57C9ADA4FE7E431657F /* VisionGeometryDiagnostics.swift in Sources */,
 				D6AEF54A74EEA01D4F15005F /* VisionHIDKey.swift in Sources */,
 				C324506DBEEDF5EE4F7A4EC9 /* VisionHardwarePointer.swift in Sources */,
 				303ED70BBC96F9D29A479CEB /* VisionHelp.swift in Sources */,
@@ -397,6 +404,7 @@
 				596DADFAD644BF560F439DA6 /* VisionKeyboardCapture.swift in Sources */,
 				769E8D7E1D33A927EF9454CA /* VisionMacMenuButton.swift in Sources */,
 				403698CC053619B9621B2E71 /* VisionMacMenus.swift in Sources */,
+				EB8946E87C07F13A73AC88F9 /* VisionNativeGeometryFixture.swift in Sources */,
 				EAF87C0CE499C5F04DE733A3 /* VisionSceneSessionLifecycle.swift in Sources */,
 				C0397BCDCCA72E1FD2B758BB /* VisionScrollMomentum.swift in Sources */,
 				12EDCEF914BA78B1D9E18257 /* VisionSessionPolicy.swift in Sources */,
@@ -470,7 +478,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -482,7 +490,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MARKETING_VERSION = 0.21.0;
+				MARKETING_VERSION = 0.22.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -549,7 +557,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -567,7 +575,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MARKETING_VERSION = 0.21.0;
+				MARKETING_VERSION = 0.22.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

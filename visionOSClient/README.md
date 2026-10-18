@@ -144,17 +144,21 @@ that pending selection. Choosing an app with an existing window selects it immed
 when its catalog is unchanged; selections made during a stream switch wait for it to finish.
 
 During normal streaming, window previews and Desktop share the top bar. Apps, Mac menus,
-text size, Touch/Mouse, Keyboard and Settings occupy a vertical bar on the left. Both bars
-are native ornaments outside the picture, so reveal and collapse do not resize the stream.
-The controls bar scrolls vertically when the scene is short; previews scroll horizontally.
+text size, Touch/Mouse, Keyboard, Settings and a lock button occupy a vertical bar on the left.
+Both bars are native ornaments outside the picture, so reveal and collapse do not resize the stream.
+Both bars sit 24 points from the window. The lock stays at the top of the left bar; its
+other controls scroll vertically when the scene is short, while previews scroll horizontally.
 Window actions and text size retain native popovers. The guided tour temporarily retains
 its full inline toolbar so its spotlight targets share the scene coordinate space.
 
-A single centered frosted pill has no visible symbol or text. Looking at it reveals both
-bars together. Clicking it switches between pinned open and Auto; clicking again returns
-to Auto. This choice is saved per scene. There is no toolbar-position setting or separate
-Controls gear/tray. Open panels, window actions and VoiceOver keep both bars visible while
-needed. Pinned open remains visible through remote input until the pill returns to Auto.
+Looking where either bar normally sits reveals both through their shared hover group. No
+visible target remains while hidden; transparent, non-actionable reveal regions retain the
+bars' exact layout bounds outside the visual clips. The left bar's lock button switches
+between pinned open and Auto; clicking again returns to Auto. Its icon shows an open lock
+in Auto and a closed lock when pinned. This choice is saved per scene. Open panels, window
+actions and VoiceOver keep both bars visible while needed. Pinned open remains visible
+through remote input until the lock button returns to Auto. There is no pill or separate
+Controls gear/tray.
 
 On visionOS 26+, one scene-local `HoverEffectGroup` controls both bars. A no-op hover effect
 on the content surface uses `preservesGroup`: looking back at the picture keeps an already
@@ -163,7 +167,7 @@ key, text insertion or scroll starts a control episode and changes that scene's 
 allowing both bars to collapse together. Pointer hover/movement and preview selection do not
 dismiss them. No gaze coordinates or gaze state enter app code. Looking outside this app can
 end the group after a one-second exit delay. On visionOS 2–25, the persistence API is unavailable:
-gaze reveal retains the one-second exit grace; the pill can pin both bars open. Actual gaze
+gaze reveal retains the one-second exit grace; the lock button can pin both bars open. Actual gaze
 transitions and hidden-control hit testing remain real-headset acceptance checks.
 
 The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
@@ -176,8 +180,14 @@ keyframe, up to about four seconds. The matching host fences retired encoder out
 acknowledging a source switch, so the dimensions belong to Desktop. Older hosts without that
 fence can briefly supply a stale shape until the next Desktop keyframe; the client does not
 reuse its cached video dimensions.
-Selected-window and Desktop scenes request uniform resizing with the source aspect, and the
-picture fills the scene without fixed padding. Minimum, preferred and maximum sizes scale
+Selected-window and Desktop scenes first release the previous uniform aspect lock. After
+observing freeform geometry, they request the new size and wait until the actual scene bounds
+match the source ratio within one point of fitted-picture slack. Only then do they request
+uniform resizing with the explicit system-accepted size. The bridge confirms both actual bounds
+and effective uniform restriction before recording success. Two bounded attempts handle request
+refusals or delayed transitions; an unconfirmed size remains freeform and retries after activation
+or a different source. Requests are canceled when the owning scene detaches, disconnects,
+deactivates, or changes source. The picture fills a matching scene without fixed padding. Minimum, preferred and maximum sizes scale
 uniformly. Login and selections awaiting valid dimensions allow freeform resizing. Later
 window video/catalog changes preserve the selection snapshot; Desktop updates only when its
 encoded dimensions change. Desktop capture does not follow the viewport, so neither path
@@ -192,3 +202,20 @@ Debug visual checks can use `-SillControls 1` to pin both bars open or
 longer read. The pure sizing check is
 `Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input
 still require Vision Pro acceptance.
+
+`-SillNativeGeometry 1` is a separate DEBUG-only native scene diagnostic. It never connects or
+browses and does not use LayoutHarness or a fixed scene frame. It runs none → 1440×900 window →
+3840×2160 Desktop against the production scene-size bridge. Red represents scene space outside
+the blue fitted source. `NATIVE_GEOMETRY` stdout records actual SwiftUI bounds, requested size,
+and observed UIKit bounds/restrictions. This isolates scene resizing; its injected Desktop size
+does not establish HEVC transport delivery, real stream layout, or headset acceptance. Normal
+DEBUG sessions also log source-bound HEVC dimension acceptance and waiting for missing dimensions.
+
+The last 30 geometry events are also saved to `Library/Caches/SillWindowGeometry.json` in all
+build configurations. Each event contains only numeric timestamp, phase, ephemeral scene ordinal,
+source kind, source/actual/requested dimensions, effective restriction, and an optional numeric
+error code. Source kinds: 0 login, 1 window, 2 Desktop, 3 none. Phases: 1 release, 2 size request,
+3 uniform lock, 4 confirmed, 5 declined, 6 awaiting dimensions, 7 retry exhaustion, 8 accepted
+Desktop HEVC dimensions (transport event, scene ordinal 0). Writes run on a serial utility queue;
+no video, titles, source identifiers, hosts, addresses, or user content are saved. This small cache
+is diagnostic evidence for an installed headset test and is overwritten as events arrive.

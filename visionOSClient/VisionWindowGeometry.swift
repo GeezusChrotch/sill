@@ -29,10 +29,16 @@ final class VisionWindowGeometryView: UIView {
         case login
         case source(Date?, StreamSource, CGSize?)
     }
+    private var diagnosticSourceSize: CGSize?
+    private let diagnosticScene = VisionGeometryDiagnostics.nextScene()
     private weak var client: StreamClient?
     private weak var owningScene: UIWindowScene?
     private var applied: Token?
     private var waitingForDimensions: Token?
+    private var attempted: Token?
+    private var resizeTask: Task<Void, Never>?
+    private var requestGeneration = UUID()
+    private var requestFailed = false
     private var disconnected = false
     private var observers: [NSObjectProtocol] = []
 
@@ -45,10 +51,17 @@ final class VisionWindowGeometryView: UIView {
                 guard let self, let current = self.owningScene, let scene = note.object as? UIWindowScene, scene === current else { return }
                 self.disconnected = true
                 self.applied = nil
+                self.cancelResize()
+            },
+            NotificationCenter.default.addObserver(forName: UIScene.willDeactivateNotification, object: nil, queue: .main) { [weak self] note in
+                guard let self, let current = self.owningScene, let scene = note.object as? UIWindowScene, scene === current else { return }
+                self.cancelResize()
+                self.attempted = nil
             },
             NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] note in
                 guard let self, let current = self.owningScene, let scene = note.object as? UIWindowScene, scene === current else { return }
                 self.disconnected = false
+                self.attempted = nil // An activation can recover a previously refused request.
                 self.applySize()
             }
         ]
@@ -59,13 +72,26 @@ final class VisionWindowGeometryView: UIView {
     deinit { removeObservers() }
 
     func removeObservers() {
+        cancelResize()
+        owningScene = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        guard let scene = window?.windowScene else { return }
+        guard let scene = window?.windowScene else {
+            cancelResize()
+            owningScene = nil
+            applied = nil
+            attempted = nil
+            return
+        }
+        if owningScene !== scene {
+            cancelResize()
+            applied = nil
+            attempted = nil
+        }
         owningScene = scene
         if let client { VisionSceneSessionLifecycle.attach(client: client, to: scene) }
         applySize()
@@ -78,16 +104,17 @@ final class VisionWindowGeometryView: UIView {
     }
 
     private func applySize() {
-        guard !disconnected, let client, let scene = owningScene else { return }
+        guard !disconnected, let client, let scene = owningScene, scene.activationState == .foregroundActive else { return }
         let token: Token
         let desired: CGSize
         if !client.connected {
             token = .login
+            diagnosticSourceSize = nil
             desired = VisionWindowSizePolicy.login
         } else {
             token = .source(client.connectedAt, client.active,
                             client.active == .desktop ? client.spatialDesktopVideoSize : nil)
-            guard token != applied else { return }
+            guard token != applied, token != attempted else { return }
             let source: CGSize
             switch client.active {
             case .window(let id):
@@ -108,6 +135,8 @@ final class VisionWindowGeometryView: UIView {
                 }
                 source = desktop
             case .none:
+                diagnosticSourceSize = nil
+                cancelResize()
                 applied = token
                 request(nil, in: scene) // Waiting for a selection must not retain a previous lock.
                 return
@@ -117,12 +146,13 @@ final class VisionWindowGeometryView: UIView {
                 return
             }
             waitingForDimensions = nil
-            applied = token // Record before requesting; viewport updates cannot request themselves.
-            request(geometry.preferred, in: scene, geometry: geometry)
+            diagnosticSourceSize = source
+            resize(to: geometry, token: token, in: scene)
             return
         }
         guard token != applied else { return }
-        applied = token // Store before requesting: a geometry update must never request itself.
+        cancelResize()
+        applied = token
         request(desired, in: scene)
     }
 
@@ -130,16 +160,124 @@ final class VisionWindowGeometryView: UIView {
         // Missing dimensions must release a previous window's ratio, but remain retryable
         // when a later catalog supplies them. Do not send on every observed client change.
         guard waitingForDimensions != token else { return }
+        cancelResize()
+        applied = nil
+        attempted = nil
         waitingForDimensions = token
+        diagnosticSourceSize = nil
+        record(phase: 6)
+        #if DEBUG
+        print("NATIVE_GEOMETRY awaiting source dimensions; releasing previous aspect")
+        #endif
         request(nil, in: scene)
     }
 
+    private func record(phase: Int, source: CGSize? = nil, requested: CGSize? = nil, errorCode: Int? = nil) {
+        let kind: Int
+        if client?.connected != true { kind = 0 }
+        else {
+            switch client?.active {
+            case .window?: kind = 1
+            case .desktop?: kind = 2
+            default: kind = 3
+            }
+        }
+        VisionGeometryDiagnostics.record(phase: phase, scene: diagnosticScene, sourceKind: kind,
+                                         source: diagnosticSourceSize ?? source, actual: window?.bounds.size, requested: requested,
+                                         restriction: owningScene?.effectiveGeometry.resizingRestrictions.rawValue,
+                                         errorCode: errorCode)
+    }
+
+    private func cancelResize() {
+        resizeTask?.cancel()
+        resizeTask = nil
+        attempted = nil
+        waitingForDimensions = nil
+        requestGeneration = UUID()
+    }
+
+    private func isCurrentSourceToken(_ token: Token) -> Bool {
+        guard let client, client.connected else { return false }
+        return token == .source(client.connectedAt, client.active,
+                                client.active == .desktop ? client.spatialDesktopVideoSize : nil)
+    }
+
+    /// `.uniform` preserves the *current* ratio, so first observe the requested ratio
+    /// under freeform resizing. A request is a preference, not a completion callback.
+    private func resize(to geometry: VisionWindowSizePolicy.WindowGeometry, token: Token, in scene: UIWindowScene) {
+        cancelResize()
+        attempted = token // Includes bounded failures; unrelated client updates must not restart it.
+        applied = nil
+        resizeTask = Task { @MainActor [weak self, weak scene] in
+            guard let self, let scene else { return }
+            for _ in 0..<2 {
+                guard !Task.isCancelled, self.owningScene === scene, self.window?.windowScene === scene,
+                      scene.activationState == .foregroundActive, self.isCurrentSourceToken(token) else { return }
+                let generation = UUID()
+                self.requestGeneration = generation
+                self.requestFailed = false
+                self.request(nil, in: scene, geometry: geometry, locked: false, generation: generation)
+                var requestedSize = false
+                var locking = false
+                for _ in 0..<20 {
+                    do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+                    guard !Task.isCancelled, self.owningScene === scene,
+                          self.window?.windowScene === scene, self.requestGeneration == generation,
+                          self.isCurrentSourceToken(token) else { return }
+                    if self.requestFailed { break }
+                    let actual = self.window?.bounds.size ?? .zero
+                    let matches = VisionWindowSizePolicy.matchesAspect(actual, source: geometry.preferred)
+                    let restriction = scene.effectiveGeometry.resizingRestrictions
+                    if !requestedSize, restriction == .freeform {
+                        requestedSize = true
+                        self.request(geometry.preferred, in: scene, geometry: geometry, locked: false, generation: generation)
+                    } else if locking {
+                        if matches && restriction == .uniform {
+                            self.applied = token
+                            self.record(phase: 4, source: geometry.preferred)
+                            #if DEBUG
+                            print("NATIVE_GEOMETRY applied=\(actual) source=\(geometry.preferred) restriction=uniform")
+                            #endif
+                            self.resizeTask = nil
+                            return
+                        }
+                    } else if requestedSize && matches && restriction == .freeform {
+                        locking = true
+                        // An explicit accepted size is required here: on the native simulator,
+                        // a nil-size restriction-only update left effectiveGeometry freeform.
+                        self.request(actual, in: scene, geometry: geometry, locked: true, generation: generation)
+                    }
+                }
+            }
+            self.record(phase: 7, source: geometry.preferred)
+            // A late or constrained uniform update must not preserve an unconfirmed ratio.
+            self.request(nil, in: scene, geometry: geometry)
+            print("spatial window aspect not confirmed after bounded retries; remains retryable on activation or source change")
+            self.resizeTask = nil
+        }
+    }
+
     private func request(_ desired: CGSize?, in scene: UIWindowScene,
-                         geometry: VisionWindowSizePolicy.WindowGeometry? = nil) {
-        scene.requestGeometryUpdate(.Vision(size: desired,
+                         geometry: VisionWindowSizePolicy.WindowGeometry? = nil,
+                         locked: Bool = false, generation: UUID? = nil) {
+        // UIKit can ignore restriction-only preferences with nil size. Explicitly preserve
+        // the current size when releasing a previous ratio as well as when locking a new one.
+        let actual = window?.bounds.size
+        let requested = desired ?? actual.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
+        record(phase: locked ? 3 : (desired == nil ? 1 : 2), source: geometry?.preferred, requested: requested)
+        #if DEBUG
+        print("NATIVE_GEOMETRY request=\(String(describing: desired)) lock=\(locked) before=\(window?.bounds.size ?? .zero) restriction=\(scene.effectiveGeometry.resizingRestrictions.rawValue)")
+        #endif
+        scene.requestGeometryUpdate(.Vision(size: requested,
                                              minimumSize: geometry?.minimum ?? VisionWindowSizePolicy.minimum,
                                              maximumSize: geometry?.maximum ?? VisionWindowSizePolicy.maximum,
-                                             resizingRestrictions: geometry == nil ? .freeform : .uniform)) { error in
+                                             resizingRestrictions: locked ? .uniform : .freeform)) { [weak self, weak scene] error in
+            guard let self, let scene, self.owningScene === scene else { return }
+            if let generation {
+                guard self.requestGeneration == generation else { return }
+                self.requestFailed = true
+            }
+            self.record(phase: 5, source: geometry?.preferred, requested: requested, errorCode: (error as NSError).code)
             print("spatial window size request declined: \(error.localizedDescription)")
         }
     }

@@ -246,6 +246,9 @@ final class StreamClient: ObservableObject {
     /// Only parameter sets received after the host acknowledges Desktop may supply its ratio.
     /// A previous window's `videoSize` can survive a source switch (including equal formats).
     @Published private(set) var spatialDesktopVideoSize: CGSize?
+    #if DEBUG
+    func setNativeGeometryFixtureDesktopSize(_ size: CGSize) { spatialDesktopVideoSize = size }
+    #endif
     @Published private(set) var supportsSpatialWindows = false
     /// Secondary windows must never fall back to an older host's shared selection.
     private var requiresSpatialCapability = false
@@ -4066,8 +4069,19 @@ final class StreamClient: ObservableObject {
                     let from = connection, epoch = visionDesktopSourceEpoch
                     DispatchQueue.main.async {
                         guard self.connection === from, self.connected, self.active == .desktop,
-                              self.visionAcknowledgedDesktopEpoch == epoch else { return }
-                        if self.spatialDesktopVideoSize != size { self.spatialDesktopVideoSize = size }
+                              self.visionAcknowledgedDesktopEpoch == epoch else {
+                            #if DEBUG
+                            print("NATIVE_GEOMETRY discarded Desktop format from retired source/session")
+                            #endif
+                            return
+                        }
+                        if self.spatialDesktopVideoSize != size {
+                            VisionGeometryDiagnostics.record(phase: 8, sourceKind: 2, source: size)
+                            #if DEBUG
+                            print("NATIVE_GEOMETRY accepted Desktop HEVC dimensions=\(size)")
+                            #endif
+                            self.spatialDesktopVideoSize = size
+                        }
                     }
                 }
                 #endif

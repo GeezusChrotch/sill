@@ -11,6 +11,18 @@ struct VisionSessionView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "SillNativeGeometry") {
+            VisionNativeGeometryFixture()
+        } else {
+            session
+        }
+        #else
+        session
+        #endif
+    }
+
+    private var session: some View {
         ContentView(spatialSeed: seed, spatialManualConnect: windowID != nil && seed == nil)
             .onAppear {
                 if let windowID { VisionWindowLaunches.shared.discard(windowID) }

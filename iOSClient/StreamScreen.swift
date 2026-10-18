@@ -1172,19 +1172,17 @@ struct StreamScreen: View {
     }
 
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
-        VStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                spatialToolbar(sidebar: false, content: .previews).frame(width: length)
-            }
-            .frame(width: size.width, height: BarMetrics.regular.height)
-            .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
-                spatialSidebarWindowMenu
-            }
-            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
-                                          group: spatialToolbarHoverGroup))
-            spatialVisibilityButton
+        ScrollView(.horizontal, showsIndicators: false) {
+            spatialToolbar(sidebar: false, content: .previews).frame(width: length)
         }
+        .frame(width: size.width, height: BarMetrics.regular.height)
+        .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
+            spatialSidebarWindowMenu
+        }
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                      group: spatialToolbarHoverGroup))
+        .modifier(VisionToolbarRevealTarget(group: spatialToolbarHoverGroup))
         .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
@@ -1209,13 +1207,18 @@ struct StreamScreen: View {
     }
 
     private func spatialControlsBar(height: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            spatialToolbar(sidebar: true, content: .controls)
+        VStack(spacing: 0) {
+            spatialVisibilityButton
+                .padding(8)
+            ScrollView(.vertical, showsIndicators: false) {
+                spatialToolbar(sidebar: true, content: .controls)
+            }
         }
         .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
         .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
         .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                       group: spatialToolbarHoverGroup, anchor: .topTrailing))
+        .modifier(VisionToolbarRevealTarget(group: spatialToolbarHoverGroup))
         .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
@@ -1239,24 +1242,20 @@ struct StreamScreen: View {
     }
 
     private var spatialVisibilityButton: some View {
-        Button {
+        BarButton(open: !spatialToolbarAutomatic, width: BarMetrics.regular.buttonWidth,
+                  height: BarMetrics.regular.buttonHeight,
+                  accessibilityLabel: spatialToolbarAutomatic ? "Pin toolbars open" : "Automatically hide toolbars") {
             spatialToolbarAutomatic.toggle()
             spatialToolbarScrollActive = false
             // Returning to Auto begins a fresh hidden phase for both bars.
             spatialToolbarHoverGeneration += 1
-        } label: {
-            Capsule()
-                .fill(.clear)
-                .frame(width: 44, height: 10)
-                .glassBackgroundEffect(in: Capsule())
-                .frame(width: 60, height: 60)
-                .contentShape(Capsule())
+        } content: {
+            Image(systemName: spatialToolbarAutomatic ? "lock.open" : "lock")
+                .font(.system(size: 22))
         }
-        .buttonStyle(.plain)
         .hoverEffect(.highlight)
-        .accessibilityLabel(spatialToolbarAutomatic ? "Keep toolbars open" : "Automatically hide toolbars")
         .accessibilityValue(spatialToolbarAutomatic ? "Automatic" : "Pinned open")
-        .accessibilityHint("Look at this pill to reveal both toolbars. Activate to switch between pinned open and automatic visibility.")
+        .accessibilityHint("Look where either toolbar sits to reveal both. Activate to switch between pinned open and automatic visibility.")
     }
 
     /// An explicit remote click, scroll or key starts control. Merely moving a

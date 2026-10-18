@@ -45,4 +45,11 @@ for desktop in [CGSize(width: 3024, height: 1964), CGSize(width: 1920, height: 1
 for bad in [CGSize.zero, CGSize(width: 0, height: 10), CGSize(width: -1, height: 10), CGSize(width: CGFloat.infinity, height: 10), CGSize(width: 10, height: CGFloat.nan)] {
     expect(VisionWindowSizePolicy.geometry(source: bad) == nil, "Invalid geometry must wait for a real source")
 }
-print("vision-window-size: exact aspect across resize range, tiny/extreme source bounds and invalid-source checks passed")
+
+
+expect(VisionWindowSizePolicy.matchesAspect(CGSize(width: 1400, height: 787.5), source: CGSize(width: 3840, height: 2160)), "Matching native Desktop geometry rejected")
+expect(!VisionWindowSizePolicy.matchesAspect(CGSize(width: 1400, height: 875), source: CGSize(width: 3840, height: 2160)), "Prior window aspect must not be locked for Desktop")
+expect(VisionWindowSizePolicy.matchesAspect(CGSize(width: 1400, height: 788), source: CGSize(width: 3840, height: 2160)), "Point-rounded native geometry rejected")
+expect(!VisionWindowSizePolicy.matchesAspect(.zero, source: CGSize(width: 3840, height: 2160)), "Detached window cannot confirm geometry")
+
+print("vision-window-size: source scaling, invalid dimensions and observed native aspect checks passed")

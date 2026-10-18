@@ -16,6 +16,18 @@ enum VisionWindowSizePolicy {
         let maximum: CGSize
     }
 
+    /// Native scene dimensions can be rounded to points; allow at most one point
+    /// of fitted-picture slack on either axis before capturing the ratio lock.
+    static func matchesAspect(_ actual: CGSize, source: CGSize) -> Bool {
+        guard actual.width.isFinite, actual.height.isFinite,
+              actual.width > 0, actual.height > 0,
+              source.width.isFinite, source.height.isFinite,
+              source.width > 0, source.height > 0 else { return false }
+        let scale = min(actual.width / source.width, actual.height / source.height)
+        return actual.width - source.width * scale <= 1
+            && actual.height - source.height * scale <= 1
+    }
+
     static func geometry(source: CGSize) -> WindowGeometry? {
         guard source.width.isFinite, source.height.isFinite,
               source.width > 0, source.height > 0 else { return nil }

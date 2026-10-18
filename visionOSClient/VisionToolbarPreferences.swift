@@ -32,6 +32,23 @@ private struct VisionToolbarRevealShape: Shape {
     }
 }
 
+/// The reveal clip belongs only to the visible bar. This non-actionable background
+/// remains at that bar's exact layout bounds even when its visual content is clipped.
+/// System hover activates the shared group without exposing gaze state to app code.
+struct VisionToolbarRevealTarget: ViewModifier {
+    let group: HoverEffectGroup
+
+    func body(content: Content) -> some View {
+        content.background {
+            Rectangle()
+                .fill(.clear)
+                .contentShape(.interaction, Rectangle())
+                .hoverEffect(in: group) { effect, _, _ in effect }
+                .accessibilityHidden(true)
+        }
+    }
+}
+
 /// On visionOS 26+, looking back at the picture preserves an already revealed
 /// group but cannot reveal an inactive group. Real remote input changes the
 /// scene-local group identity to begin a fresh, inactive phase.
