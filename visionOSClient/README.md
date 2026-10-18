@@ -151,11 +151,16 @@ other controls scroll vertically when the scene is short, while previews scroll 
 Window actions and text size retain native popovers. The guided tour temporarily retains
 its full inline toolbar so its spotlight targets share the scene coordinate space.
 
-Looking where either bar normally sits reveals both through their shared hover group. No
-visible target remains while hidden; transparent, non-actionable reveal regions retain the
-bars' exact layout bounds outside the visual clips. The left bar's lock button switches
+The 0.23 candidate uses an explicit hover-effect content shape on each complete bar and
+compositor opacity to attempt revealing both through their shared hover group. No separate
+visible target remains while hidden. This replaces build 22's zero-size visual clip and clear
+background target, which the owner reported could not reveal either bar on hardware. Invisible
+gaze activation is still a headset acceptance gate; compilation does not establish that it works. The left bar's lock button switches
 between pinned open and Auto; clicking again returns to Auto. Its icon shows an open lock
-in Auto and a closed lock when pinned. This choice is saved per scene. Open panels, window
+in Auto and a closed lock when pinned. Each stream-screen appearance starts pinned open,
+even if a previous scene stored Auto. Returning after an actual background phase also pins both
+open; ordinary inactive/focus/keyboard transitions do not. If invisible reveal fails, close and
+reopen the Sill window to recover the controls, then leave the lock closed. Open panels, window
 actions and VoiceOver keep both bars visible while needed. Pinned open remains visible
 through remote input until the lock button returns to Auto. There is no pill or separate
 Controls gear/tray.
