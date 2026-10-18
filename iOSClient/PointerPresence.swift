@@ -35,7 +35,7 @@ struct PointerPresence: Equatable {
     /// Who moved the pointer last: this device, or the Mac or another device.
     enum Control: Equatable { case here, elsewhere }
     /// What drew this device's own pointer.
-    enum Origin: Equatable { case trackpad, pencil, none }
+    enum Origin: Equatable { case trackpad, pencil, spatial, none }
 
     /// A new session: the Mac has the pointer until this device's first input (Q6).
     var control: Control = .elsewhere
@@ -50,6 +50,11 @@ struct PointerPresence: Equatable {
     var portrait = false
     /// Something streams (`client.active != .none`).
     var streaming = false
+    /// Enabled only by the native spatial client while any stream source is active.
+    var spatialStream = false
+    /// Native visionOS retains the latest accepted position through typing and scrolling.
+    var persistentSpatial = false
+    private(set) var spatialAnchor: CGPoint?
     /// Q2: the Pencil draws no pointer, hovering or touching (the request, by its letter). True draws
     /// it again, in any layout (the harness's `-SillPencilPointer 1`).
     var pencilShowsPointer = PointerPresence.pencilShowsPointerByDefault
@@ -67,6 +72,10 @@ struct PointerPresence: Equatable {
     /// Where the sprite's tip goes, a fraction of the frame, or nil to hide it.
     func sprite(now: Double) -> CGPoint? {
         guard streaming else { return nil }
+        if persistentSpatial {
+            if control == .elsewhere { return macInside ? mac : nil }
+            return own ?? spatialAnchor
+        }
         switch control {
         case .elsewhere:
             return macInside ? mac : nil
@@ -78,6 +87,8 @@ struct PointerPresence: Equatable {
                 return own
             case .pencil:
                 return pencilShowsPointer ? own : nil
+            case .spatial:
+                return spatialStream ? own : nil
             case .none:
                 return nil
             }
@@ -115,6 +126,7 @@ struct PointerPresence: Equatable {
         control = feed.control
         mac = feed.mac
         macInside = feed.macInside
+        spatialAnchor = feed.anchor
     }
 
     /// A key from the portrait key row hands the pointer to this device, as every input does, and
@@ -135,7 +147,7 @@ struct PointerPresence: Equatable {
     /// middle, and the Mac's pointer is moved there too, so the two agree (as before this plan). The
     /// Mac's arrow needs nothing: the host's next report is in the new geometry.
     func recentresOnNewFrame(now: Double) -> Bool {
-        control == .here && own != nil && sprite(now: now) != nil
+        origin != .spatial && control == .here && own != nil && sprite(now: now) != nil
     }
 
     /// §3.3: a report (kind 26) counts only if the Mac had read every input this device sent on the

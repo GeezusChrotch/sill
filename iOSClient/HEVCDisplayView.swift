@@ -76,7 +76,11 @@ final class HEVCDisplayView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // A standalone layer renders at 1× unless told otherwise; the arrow should be crisp.
+        #if os(visionOS)
+        cursorLayer.contentsScale = traitCollection.displayScale
+        #else
         if let scale = window?.screen.scale { cursorLayer.contentsScale = scale }
+        #endif
     }
 
     override func layoutSubviews() {
@@ -137,6 +141,47 @@ final class HEVCDisplayView: UIView {
             layer.addSublayer(frame)
             debugFrame = frame
         }
+        setNeedsLayout()
+        placeCursor()
+    }
+
+    /// `-SillPointerVideo 1`: exercise the real video layer with an uncompressed blue sample.
+    /// Unlike the gray mock rectangle this is an enqueued video image, so simulator screenshots
+    /// can catch video/overlay compositing failures. No capture, host, network or HEVC fixture.
+    func debugVideoFrame(size: CGSize) {
+        pointerVideoSize = size
+        debugFrame?.removeFromSuperlayer()
+        debugFrame = nil
+        var buffer: CVPixelBuffer?
+        let width = Int(size.width), height = Int(size.height)
+        guard width > 0, height > 0,
+              CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer) == kCVReturnSuccess,
+              let buffer else { preconditionFailure("Synthetic video pixel buffer failed") }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let bytes = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let stride = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0..<height {
+            for x in 0..<width {
+                let pixel = bytes.advanced(by: y * stride + x * 4)
+                pixel[0] = 160; pixel[1] = 70; pixel[2] = 20; pixel[3] = 255
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        var description: CMVideoFormatDescription?
+        guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
+                imageBuffer: buffer, formatDescriptionOut: &description) == noErr,
+              let description else { preconditionFailure("Synthetic video format failed") }
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer,
+                formatDescription: description, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
+              let sample else { preconditionFailure("Synthetic video sample failed") }
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) as NSArray?,
+           let first = attachments.firstObject as? NSMutableDictionary {
+            first[kCMSampleAttachmentKey_DisplayImmediately as String] = true
+        }
+        displayLayer.enqueue(sample)
         setNeedsLayout()
         placeCursor()
     }

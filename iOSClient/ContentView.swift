@@ -4,13 +4,31 @@ import StreamProtocol
 
 struct ContentView: View {
     @StateObject private var client = StreamClient()
+    #if os(visionOS)
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
     /// Tells the host what this device sees, once a second while connected. Also covers the DEBUG
     /// harness's `-SillLive 1` session, which runs on this same client.
     @StateObject private var statsReporter = ClientStatsReporter()
 
     var body: some View {
         root.onAppear { statsReporter.attach(to: client) }
+        #if os(visionOS)
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { stopSpatialSession() }
+            }
+            .onDisappear { stopSpatialSession() }
+        #endif
     }
+
+    #if os(visionOS)
+    private func stopSpatialSession() {
+        client.cancelPendingLink()
+        client.cancelPairing()
+        client.endOverlayAsk(withdraw: true)
+        client.disconnect()
+    }
+    #endif
 
     @ViewBuilder private var root: some View {
         #if DEBUG
@@ -28,9 +46,16 @@ struct ContentView: View {
 
     private var app: some View {
         ZStack {
+            #if os(visionOS)
+            Color.clear.ignoresSafeArea()
+            #else
             Color.black.ignoresSafeArea()
+            #endif
             if client.connected {
                 StreamScreen(client: client)
+                    #if os(visionOS)
+                    .id(client.connectedAt)
+                    #endif
             } else {
                 ConnectScreen(client: client)
             }
@@ -60,12 +85,14 @@ struct ContentView: View {
     /// included, with no hand on the simulator (the harness's fake screen has no insets).
     private static func orientFromLaunchArgument() {
         guard let raw = UserDefaults.standard.string(forKey: "SillOrientation") else { return }
+        #if !os(visionOS)
         let mask: UIInterfaceOrientationMask = raw == "portrait" ? .portrait : .landscapeRight
         for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
                 print("orientation: \(raw) refused: \(error.localizedDescription)")
             }
         }
+        #endif
     }
     #endif
 }
@@ -278,6 +305,9 @@ struct ContentView: View {
 ///   insertion) and `-SillSecondWindow 1` (a second window opens 2 s after launch: with two, the bar
 ///   gets none of the Mac's menus). The console's "menus: …" and "menubar: …" lines say what
 ///   happened.
+/// * `-SillPointerVideo 1` — with `-SillPointer`, enqueue a blue uncompressed video sample in the
+///   real AVSampleBufferDisplayLayer instead of the gray mock layer. `spatial@X,Y` exercises the
+///   visionOS spatial pointer feed; `mac@X,Y` and `hidden` compare visible and hidden sprites.
 /// * `-SillPointer <state>` — the pointer sprite in one of docs/pointer-visibility-plan.md's states,
 ///   over the mock's 2800×1800 frame, drawn as a dim rectangle so a photo shows where the frame is
 ///   (the mock never streams): `mac@0.40,0.30` (the Mac has the pointer, over the stream: its arrow
@@ -520,14 +550,18 @@ struct LayoutHarness: View {
         GeometryReader { geo in
             let fit = Fit(screen: spec.size, room: geo.size)
             ZStack {
+                #if !os(visionOS)
                 Color.black
+                #endif
                 insetScreen
                     .environment(\.duoEnvironment, spec.duoEnvironment)
                     .frame(width: spec.size.width, height: spec.size.height)
                     .coordinateSpace(.named(DuoPosture.displaySpace))
                     .clipped()
                     .padding(1)
+                    #if !os(visionOS)
                     .background(Color(hex: 0x333333))
+                    #endif
                     .rotationEffect(.degrees(fit.turned ? 90 : 0))
                     // Only the drawing shrinks: the stream screen still lays out at the fake size.
                     .scaleEffect(fit.scale)
@@ -813,12 +847,14 @@ enum InputScript {
         case .wheel(let dx, let dy): if let overlay { overlay.scriptScroll(dx: dx, dy: dy, from: .wheel) } else { done = false }
         case .keyboard(let attached): HardwareKeyboardMonitor.shared.scriptSet(attached: attached)
         case .orient(let orientation):
+            #if !os(visionOS)
             let mask: UIInterfaceOrientationMask = orientation == "portrait" ? .portrait : .landscapeRight
             for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
                 scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
                     print("input script: orient \(orientation) refused: \(error.localizedDescription)")
                 }
             }
+            #endif
         }
         print(String(format: "input script: t=%.2f ", at) + (done ? "\(step)" : "\(step): nothing to take it in this layout"))
     }
@@ -962,7 +998,13 @@ struct ConnectScreen: View {
             // A field has the keyboard: the column goes to the top (the half-folded Duo's is already
             // in the top half), so Pair stays above the keyboard. The screen ignores the keyboard's
             // safe area below, so nothing else moves (the footer stays under the keyboard).
+
+            #if os(visionOS)
+            // The spatial keyboard floats outside this window; moving its field breaks focus aim.
+            let toTop = false
+            #else
             let toTop = editing && !layout.topHalf
+            #endif
             // The column where it sat before there was a footer, and the footer along the bottom:
             // the footer never moves the title. Only a column that would come within the gap of the
             // footer rises to keep it; one too tall for that even at the top (many Macs on a phone
@@ -1016,6 +1058,10 @@ struct ConnectScreen: View {
             }
             .duoLog(posture, size: geo.size, screen: "connect screen")
         }
+        #if os(visionOS)
+        // Scope glass to discovery/pairing; the connected picture's floating gap stays clear.
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        #endif
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onChange(of: client.pairing) { old, new in
             // Paired but no session came (10 s): the card closes, and the Mac is a saved row.

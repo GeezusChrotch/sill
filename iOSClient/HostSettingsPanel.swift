@@ -49,7 +49,11 @@ struct HostSettingsPanel: View {
     @Environment(\.largerPictureOffered) private var offersLargerPicture
     /// This device's switch for the clipboard (docs/clipboard-plan.md): on unless turned off, read by
     /// StreamClient+Clipboard at each decision; a change subscribes or stops at once.
+    #if os(visionOS)
+    @AppStorage(StreamClient.clipboardKey) private var clipboardOn = false
+    #else
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = true
+    #endif
     /// VoiceOver is on: it keeps three-finger swipes and taps for itself, so the This iPad group says
     /// its rows do the gestures instead.
     @State private var voiceOver = HostSettingsPanel.voiceOverRunning
@@ -119,7 +123,9 @@ struct HostSettingsPanel: View {
         .onAppear { headerFocused = true }
         // A refused change: the control has already gone back to the Mac's value, and the reason
         // is in the footer or the note. The haptic is a no-op on an iPad.
+        #if !os(visionOS)
         .sensoryFeedback(.warning, trigger: client.settingsRefusals)
+        #endif
         .onChange(of: client.settingsRefusals) { _, _ in
             AccessibilityNotification.Announcement("\(mac) kept its setting").post()
         }
@@ -609,7 +615,13 @@ struct HostSettingsPanel: View {
     }
 
     /// "iPhone" or "iPad", for copy about this device.
-    private var device: String { UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : "iPad" }
+    private var device: String {
+        #if os(visionOS)
+        return "Vision Pro"
+        #else
+        return UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : "iPad"
+        #endif
+    }
 
     /// Under the Direct Wireless Connection row: what it does and costs, and, while the switch shows
     /// on and this device is connected over it, what turning it off does to this device: the Mac
@@ -715,6 +727,15 @@ private struct GestureRow: View {
     /// Measured afresh when the text size changes, as `AdaptiveRow` is.
     @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
+        #if os(visionOS)
+        if let only = does.first, does.count == 1 {
+            Button { perform(only.gesture) } label: { row }.buttonStyle(.plain)
+        } else {
+            Menu { ForEach(does, id: \.name) { item in Button(item.name) { perform(item.gesture) } } }
+                label: { row }
+                .buttonStyle(.plain)
+        }
+        #else
         if let only = does.first, does.count == 1 {
             row.accessibilityAddTraits(.isButton).accessibilityAction { perform(only.gesture) }
         } else {
@@ -722,6 +743,7 @@ private struct GestureRow: View {
                 ForEach(does, id: \.name) { item in Button(item.name) { perform(item.gesture) } }
             }
         }
+        #endif
     }
     private var row: some View {
         ViewThatFits(in: .horizontal) {

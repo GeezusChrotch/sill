@@ -46,6 +46,19 @@ package final class StreamCoordinator {
     let synthetic: Bool
     let syntheticCapture = SyntheticCapture()
     let injector = InputInjector()
+    private struct EditableClick {
+        let id = UUID()
+        let device: ObjectIdentifier
+        let source: StreamSource
+        let intent: UUID
+        let x: Double, y: Double
+        let rect: CGRect
+        let at: CFAbsoluteTime
+    }
+    private var editableClick: EditableClick?
+    private var editableDown: EditableClick?
+    private var editableReadInFlight = false
+    private var editableInputRevision = UUID()
     let sizer = WindowSizer()
     /// The Mac's pointer (PointerWatch): who moves it, and where it is in the streamed source, for
     /// the devices that are not moving it (kind 26, sent by StreamServer). Its geometry follows the
@@ -154,7 +167,10 @@ package final class StreamCoordinator {
         }
     }
     private var rectCache: (id: CGWindowID, rect: CGRect, at: CFAbsoluteTime)?
-    private var pendingLaunch: String?
+    private var selectionIntent = UUID()
+    private var appRestoreTask: Task<Void, Never>?
+    private var appRestoreOwner: ObjectIdentifier?
+    private var pendingLaunch: (bundleID: String, intent: UUID, owner: ObjectIdentifier, expires: Date)?
     private var switching = false
     /// A restart of the active source is in flight (a settings change, a resize, a rate change,
     /// the encoder fallback, a lost display): the source being restarted. Nil during a switch to
@@ -396,6 +412,13 @@ package final class StreamCoordinator {
                 self.routes[id] = nil
                 self.lastPairingWanted[id] = nil
                 self.connections[id] = nil
+                if self.editableClick?.device == id { self.editableClick = nil }
+                if self.pendingLaunch?.owner == id { self.pendingLaunch = nil }
+                if self.appRestoreOwner == id {
+                    self.selectionIntent = UUID()
+                    self.appRestoreTask?.cancel()
+                    self.appRestoreTask = nil; self.appRestoreOwner = nil
+                }
                 self.lastPublished[id] = nil
                 self.linkReports[id] = nil
                 if self.flipWait == id { self.flipWait = nil }
@@ -445,6 +468,7 @@ package final class StreamCoordinator {
         server.onMessage = { [weak self] message, connection in
             Task { @MainActor in await self?.handle(message, from: connection) }
         }
+        catalog.onRunningAppsChanged = { [weak self] in self?.broadcastList() }
         catalog.onWindowsChanged = { [weak self] infos in
             Task { @MainActor in await self?.windowsChanged(infos) }
         }
@@ -875,9 +899,14 @@ package final class StreamCoordinator {
     // MARK: Client messages
 
     private func handle(_ message: StreamMessage, from connection: NWConnection) async {
+        if [.input, .gesture, .windowCommand, .selectSource, .launchApp].contains(message.kind) {
+            editableInputRevision = UUID(); editableClick = nil
+        }
         switch message.kind {
         case .selectSource:
             guard let source = Wire.decode(StreamSource.self, from: message.payload) else { return }
+            selectionIntent = UUID(); pendingLaunch = nil
+            appRestoreTask?.cancel(); appRestoreTask = nil; appRestoreOwner = nil
             // A window picked comes forward on the Mac, which closes a view a gesture opened; the
             // Desktop picked (as a device does before a gesture made over a window) leaves it.
             if case .window = source { gestureChords.forget() }
@@ -901,10 +930,37 @@ package final class StreamCoordinator {
             Stats.shared.bump("win.\(cmd.action.rawValue)")
             await catalog.refreshWindows()      // show the result now, not at the next poll
         case .launchApp:
-            guard let req = Wire.decode(LaunchApp.self, from: message.payload),
-                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: req.bundleID) else { return }
+            guard let req = Wire.decode(LaunchApp.self, from: message.payload) else { return }
+            selectionIntent = UUID(); pendingLaunch = nil
+            appRestoreTask?.cancel(); appRestoreTask = nil; appRestoreOwner = nil
+            let intent = selectionIntent, owner = ObjectIdentifier(connection)
             gestureChords.forget()              // the app comes forward, which closes a view a gesture opened
-            pendingLaunch = req.bundleID
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: req.bundleID).first(where: {
+                $0.activationPolicy == .regular && !$0.isTerminated && $0.processIdentifier != WindowCatalog.ownPID
+            }), !catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
+                // Explicit drawer activation only: never leave a pending launch that could steal a
+                // later selection. Restore one minimized window off the main actor, bounded.
+                pendingLaunch = nil
+                let pid = app.processIdentifier
+                let restore = Task.detached(priority: .userInitiated) { Self.restoreMinimizedWindow(pid: pid) }
+                appRestoreTask = restore; appRestoreOwner = owner
+                await restore.value
+                guard selectionIntent == intent, connections[owner] === connection, !app.isTerminated else { return }
+                appRestoreTask = nil; appRestoreOwner = nil
+                app.unhide()
+                app.activate(options: [.activateAllWindows])
+                await catalog.refreshWindows()
+                guard selectionIntent == intent, connections[owner] === connection else { return }
+                if let window = catalog.infos.first(where: { $0.bundleID == req.bundleID }) {
+                    await select(.window(window.id), bringForward: true)
+                } else {
+                    // A windowless app still comes forward, with its menu visible on Desktop.
+                    await select(.desktop)
+                }
+                return
+            }
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: req.bundleID) else { return }
+            pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
             let config = NSWorkspace.OpenConfiguration()
             // The launch itself takes no focus on the Mac. Its first window is then picked for the
             // device (`windowsChanged`), which in regular mode brings it forward like any pick.
@@ -912,8 +968,12 @@ package final class StreamCoordinator {
             NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
                 if let error { print("Launch failed: \(error.localizedDescription)") }
             }
+        case .editableFocus:
+            guard let request = Wire.decode(EditableFocus.self, from: message.payload), request.isValidRequest else { return }
+            await answerEditableFocus(request, to: connection)
         case .input:
-            guard let event = Wire.decode(InputEvent.self, from: message.payload) else { return }
+            guard let event = Wire.decode(InputEvent.self, from: message.payload) else { editableDown = nil; return }
+            if case .pointer(.leftUp, _, _) = event {} else { editableDown = nil }
             let device = ObjectIdentifier(connection)
             guard let rect = currentSourceRect() else {
                 // Nothing streams (between sources, or the stream stopped: the window closed under a
@@ -1203,6 +1263,7 @@ package final class StreamCoordinator {
     /// One exception: a staged window that comes home because the virtual display was turned off
     /// comes forward too, whichever select commits that change (see `cameHome`).
     func select(_ source: StreamSource, bringForward: Bool = false) async {
+        editableDown = nil; editableClick = nil; editableInputRevision = UUID()
         guard !switching, !shuttingDown else { return }
         switching = true
         if source != active { missingPolls = 0 }    // a window's looks off the list are its own
@@ -1333,6 +1394,13 @@ package final class StreamCoordinator {
             // On the virtual display the window may have left the on-screen list; look it up fully.
             var found = catalog.window(id: id)
             if found == nil, virtualDisplay || leftStage { found = await catalog.resolveWindow(id: id) }
+            if found == nil, comeForward {
+                // A pick may arrive during a Space transition. Refresh through the catalog's
+                // eligibility checks; an unrestricted full-list lookup could revive a minimized
+                // or hidden window merely because an older device still has its thumbnail.
+                await catalog.refreshWindows()
+                found = catalog.window(id: id)
+            }
             guard let w = found else {
                 if virtualDisplay { stage.release() }
                 active = .none; broadcastList(); return
@@ -1529,9 +1597,92 @@ package final class StreamCoordinator {
         if !heldInput.isEmpty || CFAbsoluteTimeGetCurrent() < holdUntil { heldInput.append(.input(event, rect, device)); return }
         logClick(event, in: rect)
         injector.apply(event, in: rect, from: device)
+        // Held activation input deliberately earns no confirmation: a check must follow a click
+        // actually delivered in this source generation, with its exact mapping.
+        if !synthetic, !switching, case .pointer(let action, let x, let y) = event,
+           x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y), !rect.isNull {
+            let click = EditableClick(device: device, source: active, intent: selectionIntent,
+                                      x: x, y: y, rect: rect, at: CFAbsoluteTimeGetCurrent())
+            if action == .leftDown { editableDown = click }
+            if action == .leftUp {
+                if let down = editableDown, down.device == device, down.source == active, down.intent == selectionIntent,
+                   down.rect == rect, down.x == x, down.y == y, click.at - down.at < 1 {
+                    editableClick = click
+                }
+                editableDown = nil
+            }
+        }
+    }
+
+    private func answerEditableFocus(_ request: EditableFocus, to connection: NWConnection) async {
+        let device = ObjectIdentifier(connection)
+        func reply(_ editable: Bool) {
+            guard connections[device] === connection else { return }
+            var result = request; result.editable = editable
+            server.send(StreamMessage(kind: .editableFocus, timestamp: Date().timeIntervalSince1970,
+                                      isKeyframe: false, payload: Wire.encode(result)), to: connection)
+        }
+        guard !editableReadInFlight, !synthetic, !switching,
+              let click = editableClick, click.device == device, click.source == request.source,
+              active == click.source, selectionIntent == click.intent,
+              click.x == request.x, click.y == request.y,
+              CFAbsoluteTimeGetCurrent() - click.at < 0.8,
+              currentSourceRect() == click.rect else { reply(false); return }
+        // Consume before suspending; only one AX read runs at a time, including hostile requests.
+        editableClick = nil
+        editableReadInFlight = true
+        let expectedPID: pid_t?
+        let expectedWindow: CGRect?
+        switch active {
+        case .window(let id):
+            guard let window = catalog.window(id: id), let pid = window.owningApplication?.processID,
+                  let bounds = Self.uniqueEditableWindowBounds(id: id, pid: pid) else { editableReadInFlight = false; reply(false); return }
+            expectedPID = pid; expectedWindow = bounds
+        case .desktop: expectedPID = nil; expectedWindow = nil
+        case .none: editableReadInFlight = false; reply(false); return
+        }
+        let clickRevision = editableInputRevision
+        let point = InputInjector.sourcePoint(click.x, click.y, in: click.rect)
+        // Give the app one short, bounded chance to process the CGEvent. No observer or polling.
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let confirmed = await Task.detached(priority: .userInitiated) {
+            EditableFocusReader.read(point: point, expectedPID: expectedPID, expectedWindow: expectedWindow)
+        }.value
+        editableReadInFlight = false
+        // Any input during the asynchronous check invalidates its revision, even at the same
+        // coordinates. A new selection of the same source also invalidates via selectionIntent.
+        let windowStillUnique: Bool
+        if case .window(let id) = click.source, let expectedPID, let expectedWindow,
+           let bounds = Self.uniqueEditableWindowBounds(id: id, pid: expectedPID) {
+            windowStillUnique = EditableFocusPolicy.sameWindowBounds(bounds, expectedWindow)
+        } else { windowStillUnique = click.source == .desktop }
+        let fresh = windowStillUnique && editableInputRevision == clickRevision && active == click.source && selectionIntent == click.intent &&
+            !switching && currentSourceRect() == click.rect && CFAbsoluteTimeGetCurrent() - click.at < 1.5
+        reply(confirmed && fresh)
+    }
+
+    /// AX exposes window geometry, not a public CGWindowID. A fresh single CG snapshot must
+    /// identify exactly one on-screen window of this PID at those bounds; stacked duplicates
+    /// are unknown. Bounded list, no AX enumeration, checked before and after the worker read.
+    private static func uniqueEditableWindowBounds(id: UInt32, pid: pid_t) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              list.count <= 4096 else { return nil }
+        let windows = list.filter { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid }
+        guard let selected = windows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }),
+              let raw = selected[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary) else { return nil }
+        var matches = 0
+        for window in windows {
+            guard let raw = window[kCGWindowBounds as String] as? NSDictionary,
+                  let other = CGRect(dictionaryRepresentation: raw as CFDictionary) else { return nil }
+            if EditableFocusPolicy.sameWindowBounds(bounds, other) { matches += 1 }
+            if matches > 1 { return nil }
+        }
+        return matches == 1 ? bounds : nil
     }
 
     private func releaseHeldInput() {
+        editableDown = nil; editableClick = nil; editableInputRevision = UUID()
         holdUntil = 0
         let held = heldInput
         heldInput = []
@@ -2169,10 +2320,14 @@ package final class StreamCoordinator {
     private func windowsChanged(_ infos: [WindowInfo]) async {
         // The pointer's rectangle follows the catalog: the Desktop's display, a window's bounds.
         defer { pointer.setGeometry(pointerGeometry(), fps: fps) }
-        if let pending = pendingLaunch, let w = infos.first(where: { $0.bundleID == pending }) {
-            pendingLaunch = nil
-            await select(.window(w.id), bringForward: true)   // launched from the device to use it: a pick
-            return
+        if let pending = pendingLaunch {
+            if pending.intent != selectionIntent || pending.expires < Date() || connections[pending.owner] == nil {
+                pendingLaunch = nil
+            } else if let w = infos.first(where: { $0.bundleID == pending.bundleID }) {
+                pendingLaunch = nil
+                await select(.window(w.id), bringForward: true)
+                return
+            }
         }
         if case .window(let id) = active {
             guard let w = infos.first(where: { $0.id == id }) else {
@@ -2316,13 +2471,35 @@ package final class StreamCoordinator {
         return table
     }
 
+    /// Only an explicit request for a running app without selectable windows reaches here.
+    /// No cached AX handles, no polling mutations, and at most a one-second IPC budget.
+    nonisolated private static func restoreMinimizedWindow(pid: pid_t) {
+        guard AXIsProcessTrusted() else { return }
+        let deadline = Date().addingTimeInterval(1)
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.1)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return }
+        for window in windows.prefix(32) {
+            guard !Task.isCancelled, Date() < deadline else { break }
+            AXUIElementSetMessagingTimeout(window, 0.1)
+            var minimized: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success,
+               (minimized as? Bool) == true, !Task.isCancelled, Date() < deadline {
+                if AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success { return }
+            }
+        }
+    }
+
     // MARK: Catalog to clients
 
     private func listMessage() -> StreamMessage {
         StreamMessage(kind: .windowList, timestamp: Date().timeIntervalSince1970, isKeyframe: false,
                       payload: Wire.encode(WindowList(macName: macName, windows: catalog.infos, active: active, launchID: launchID,
                                                       hostVersion: hostVersion, protocol: SillProtocol.current,
-                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised)))
+                                                      gestures: TrackpadGesture.generation, clipboard: clipboard.advertised,
+                                                      runningApps: catalog.runningApps, editableFocus: synthetic ? nil : EditableFocus.generation)))
     }
 
     private func broadcastList() { server.broadcast(listMessage()) }

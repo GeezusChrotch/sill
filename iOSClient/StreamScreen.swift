@@ -104,6 +104,8 @@ struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     @State private var drawerOpen = false
     @State private var keyboardShown = false
+    @State private var keyboardToolsOpen = false
+    @State private var keyboardShowEpoch = UUID()
     /// Modifiers held down by the portrait key row until the next key, character or click uses
     /// them. Lives up here so rotating the iPad does not drop a half-typed shortcut.
     @State private var latched: KeyModifiers = []
@@ -250,6 +252,7 @@ struct StreamScreen: View {
                 // Under the pairing overlay and the tour nothing takes a touch: not the bar, and
                 // not the stream's UIKit input view (nor, so, the Pencil, a hover or a key).
                 .allowsHitTesting(!overlayShown && tour == nil)
+                .environment(\.spatialInputAllowed, keyboardTakers.isEmpty && scenePhase == .active && windowMenu == nil && !scaleOpen)
                 // The pointer sprite follows the layout: the trackpad's arrow shows only in the
                 // laptop layout, and a rotation re-renders it at once; the Mac's arrow stays.
                 .onChange(of: DuoLayout.of(geo.size).isPortrait, initial: true) { _, portrait in
@@ -322,7 +325,9 @@ struct StreamScreen: View {
             }
             #endif
         }
+        #if !os(visionOS)
         .background(Color.black)
+        #endif
         .overlayPreferenceValue(WindowMenuAnchorKey.self) { anchor in
             if let anchor, let id = windowMenu, let window = client.windows.first(where: { $0.id == id }) {
                 WindowLightsMenu(anchor: anchor, window: window,
@@ -331,14 +336,24 @@ struct StreamScreen: View {
                                  alwaysBelow: DuoLayout.drawsPhone)
             }
         }
+        #if !os(visionOS)
         .animation(.spring(duration: 0.25, bounce: 0.2), value: windowMenu)
+        #endif
         .onChange(of: client.pendingLink) { _, link in
             // An outside link while streaming: the panel and the keyboard go first, as for Pair This iPad….
             if link != nil { openLinkOverlay() }
         }
         .onChange(of: scenePhase) { _, phase in
             // A gesture cut short by a scene change never ends: put the transient UI away.
-            if phase != .active { scaleOpen = false; windowMenu = nil }
+            if phase != .active {
+                scaleOpen = false; windowMenu = nil
+                #if os(visionOS)
+                overlay.setKeyboard(shown: false)
+                keyboardToolsOpen = false
+                keyboardShowEpoch = UUID()
+                keyboardBeforeSettings = false; keyboardAfterMenus = false; tourKeyboardAfter = false
+                #endif
+            }
         }
         // One thing open at a time: the Aa ruler and a thumbnail's traffic lights put the Settings
         // panel away. (Opening the panel closes them, the drawer and the keyboard.)
@@ -356,10 +371,16 @@ struct StreamScreen: View {
             #endif
         }
         .onChange(of: client.active) { _, source in
+            keyboardShowEpoch = UUID()
+            keyboardToolsOpen = false
             if source != .none { withAnimation(.easeOut(duration: 0.18)) { drawerOpen = false } }
             // The host sizes a window as it selects it, from the last viewport it has; this repeat
             // is for a host that restarted, or a window that was picked from the Mac's side.
             sendViewport()
+        }
+        .onChange(of: client.connectedAt) { _, _ in
+            keyboardToolsOpen = false
+            keyboardShowEpoch = UUID()
         }
         .onChange(of: client.connected) { _, up in
             if up { sendViewport() }
@@ -367,7 +388,18 @@ struct StreamScreen: View {
         // A hardware keyboard (docs/hardware-keyboard-plan.md §2): the input view takes the keyboard by
         // itself while one is attached and nothing open takes it, never as the person's own.
         .onReceive(HardwareKeyboardMonitor.shared.$attached) { overlay.update(attached: $0) }
-        .onChange(of: keyboardTakers, initial: true) { _, takers in overlay.update(takers: takers) }
+        .onChange(of: keyboardTakers, initial: true) { _, takers in
+            #if os(visionOS)
+            if !takers.isEmpty { client.cancelRemoteKeyboardRequest() }
+            #endif
+            overlay.update(takers: takers)
+        }
+        #if os(visionOS)
+        .onChange(of: client.editableFocusActivation) { _, token in
+            guard let token, client.isCurrentEditableFocusActivation(token) else { return }
+            showSpatialKeyboard(confirmedToken: token)
+        }
+        #endif
         // Rotation animates, and a Mac window resize restarts the stream, so let the size settle.
         .onChange(of: panelSize) { _, _ in sendViewport(after: 0.25) }
         // Same wait for Aa: cycling from Off to 0.8× passes three sizes nobody wants the Mac to try.
@@ -377,9 +409,11 @@ struct StreamScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: RunLoop.main)) { _ in
             sendViewport(after: 0.25)
         }
+        #if !os(visionOS)
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.modeDidChangeNotification).receive(on: RunLoop.main)) { _ in
             sendViewport(after: 0.25)
         }
+        #endif
         // Away from home the stream rate follows the route (60 fps through a VPN or the internet): a
         // session that stops being away (the move home) asks for its full rate whatever path it took
         // (docs/remote-bundle-plan.md §7.3).
@@ -512,6 +546,9 @@ struct StreamScreen: View {
         guard !Self.launchArgumentsRan else { return }
         Self.launchArgumentsRan = true
         let defaults = UserDefaults.standard
+        #if os(visionOS)
+        if defaults.bool(forKey: "SillMouseMode") { client.visionMouseMode = true }
+        #endif
         let live = !client.mockDiscovery
         func after(_ seconds: Double, _ step: @escaping () -> Void) {
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: step)
@@ -633,10 +670,16 @@ struct StreamScreen: View {
     private var keyboardTakers: Set<HardwareKeyboardPolicy.Taker> {
         var takers: Set<HardwareKeyboardPolicy.Taker> = []
         if settingsOpen { takers.insert(.settings) }
+        #if os(visionOS)
+        if keyboardToolsOpen { takers.insert(.menus) }
+        #endif
         if overlayShown { takers.insert(.pairing) }
         if tour != nil { takers.insert(.tour) }
         if drawerOpen { takers.insert(.drawer) }
         if menusOpen { takers.insert(.menus) }
+        #if os(visionOS)
+        if scenePhase != .active { takers.insert(.inactive) }
+        #endif
         return takers
     }
 
@@ -705,7 +748,9 @@ struct StreamScreen: View {
             largerPictureHeld = open ? largerPictureNow : nil
         }
         if !open {
+            #if !os(visionOS)
             if restoreKeyboard, keyboardBeforeSettings { overlay.setKeyboard(shown: true) }
+            #endif
             keyboardBeforeSettings = false
         }
     }
@@ -729,7 +774,9 @@ struct StreamScreen: View {
         #if DEBUG
         if keyboardAfterMenus { print("menus: the pull-down went; the keyboard back up, as before the Settings panel") }
         #endif
+        #if !os(visionOS)
         if keyboardAfterMenus { overlay.setKeyboard(shown: true) }
+        #endif
         keyboardAfterMenus = false
         menusOpen = false
     }
@@ -959,7 +1006,9 @@ struct StreamScreen: View {
         let onScreen = tourOnScreen
         withAnimation(.easeOut(duration: 0.2)) { tour = nil }
         client.tourSession.running = false
+        #if !os(visionOS)
         if tourKeyboardAfter && !overlayShown { overlay.setKeyboard(shown: true) }
+        #endif
         tourKeyboardAfter = false
         // VoiceOver reads the stream screen afresh (not from under the pairing overlay).
         if onScreen { AccessibilityNotification.ScreenChanged().post() }
@@ -1024,20 +1073,58 @@ struct StreamScreen: View {
         reduceMotion ? .opacity : .scale(scale: 0.94, anchor: anchor).combined(with: .opacity)
     }
 
+    private func showSpatialKeyboard(confirmedToken: String? = nil) {
+        keyboardToolsOpen = false
+        let epoch = keyboardShowEpoch
+        #if os(visionOS)
+        let focus = overlay.focusEpoch
+        #endif
+        let session = client.connectedAt
+        let source = client.active
+        DispatchQueue.main.async {
+            guard scenePhase == .active, !keyboardToolsOpen, keyboardShowEpoch == epoch,
+                  client.connected, client.connectedAt == session, client.active == source else { return }
+            #if os(visionOS)
+            guard overlay.focusEpoch == focus else { return }
+            if let confirmedToken, !client.isCurrentEditableFocusActivation(confirmedToken) { return }
+            #endif
+            overlay.setKeyboard(shown: true)
+        }
+    }
+
+    private static var nativeToolbarButtons: Int {
+        #if os(visionOS)
+        7
+        #else
+        6
+        #endif
+    }
+
     private func landscape(bar plain: BarMetrics, width: CGFloat, fold: FoldInfo) -> some View {
         // The book pose (docs/iphone-duo-plan.md, (a)): nothing on the fold's band; elsewhere as before.
         let (bar, stripWidth) = plain.clearing(fold, width: width)
-        return VStack(spacing: 0) {
+        #if os(visionOS)
+        let surfaceGap: CGFloat = 24
+        #else
+        let surfaceGap: CGFloat = 0
+        #endif
+        return VStack(spacing: surfaceGap) {
             TopBar(client: client, metrics: bar, stripWidth: stripWidth, drawerOpen: $drawerOpen,
                    keyboardShown: $keyboardShown,
                    textScale: $textScale, scaleOpen: $scaleOpen, windowMenu: $windowMenu,
                    settingsOpen: settingsOpen,
                    // Apps, Menus, Aa, Keyboard, Desktop, Settings, and the strip.
-                   menusFit: MacMenuButton.fits(width: width - 2 * bar.padding, buttons: 6, buttonWidth: bar.buttonWidth,
+                   menusFit: MacMenuButton.fits(width: width - 2 * bar.padding, buttons: Self.nativeToolbarButtons, buttonWidth: bar.buttonWidth,
                                                 gap: bar.gap, thumbWidth: bar.thumbWidth),
-                   toggleKeyboard: { overlay.toggleKeyboard() },
+                   toggleKeyboard: {
+                       #if os(visionOS)
+                       client.cancelRemoteKeyboardRequest()
+                       #endif
+                       overlay.toggleKeyboard()
+                   },
                    setSettings: { setSettings($0, restoreKeyboard: $1) },
-                   menusOpened: menusOpened, menusClosed: menusClosed)
+                   menusOpened: menusOpened, menusClosed: menusClosed,
+                   keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() }, overlay: overlay)
             contentArea(bar: bar)
         }
     }
@@ -1056,26 +1143,39 @@ struct StreamScreen: View {
                              pairThisDevice: openPairingOverlay,
                              linkLine: shownLinkLine,
                              takeTour: takeTour,
-                             largerKeyboard: largerKeyboard)
+                             largerKeyboard: largerKeyboard,
+                             keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() })
     }
 
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
 
     private func contentArea(bar: BarMetrics) -> some View {
         ZStack(alignment: .topLeading) {
+            #if !os(visionOS)
             Color.black
+            #endif
 
             ZStack {
                 StreamView(client: client)
                 // Same frame as the video, so a touch maps straight onto the streamed frame.
                 InputOverlay(videoSize: client.videoSize,
-                             send: { client.sendInput($0) },
-                             setOwnPointer: { client.setOwnPointer($0, from: $1) },
+                             send: client.surfaceInputSender,
+                             setOwnPointer: client.surfacePointerSender,
+                             pointerFeed: { client.pointerFeedState },
+                             cancelRemoteKeyboardRequest: {
+                                 #if os(visionOS)
+                                 client.cancelRemoteKeyboardRequest()
+                                 #endif
+                             },
                              proxy: overlay,
                              isKeyboardShown: $keyboardShown,
                              latchedModifiers: latched,
                              onModifiersConsumed: { latched = [] },
                              sendGesture: { client.sendGesture($0, fingers: $1) })
+                    .spatialInputBoundary(client: client)
+                #if os(visionOS)
+                VisionPointerRecovery(client: client).frame(maxHeight: .infinity, alignment: .bottom)
+                #endif
             }
             .background(Palette.panel)
             .overlay(alignment: .top) { LinkLineView(text: shownLinkLine) }
@@ -1234,6 +1334,12 @@ private struct TopBar: View {
     /// The Menus pull-down opened and went (see `StreamScreen.menusOpened`).
     let menusOpened: () -> Void
     let menusClosed: () -> Void
+    @Binding var keyboardTools: Bool
+    let showKeyboard: () -> Void
+    let overlay: InputOverlayProxy
+    #if os(visionOS)
+    @Environment(\.scenePhase) private var scenePhase
+    #endif
 
     var body: some View {
         HStack(spacing: metrics.gap) {
@@ -1273,9 +1379,32 @@ private struct TopBar: View {
                              pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
                 .tourTarget(.textSize)
 
+            #if os(visionOS)
+            VisionMouseModeButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight, spacing: metrics.buttonSpacing)
+                .opacity(scaleOpen ? 0 : 1)
+                .allowsHitTesting(!scaleOpen)
+            #endif
             button(open: keyboardShown, symbol: "keyboard", label: "Keyboard",
                    accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
-                   action: { setSettings(false, false); toggleKeyboard() })
+                   action: keyboardTapped)
+                #if os(visionOS)
+                .visionKeyboardToolsGesture(tap: keyboardTapped) {
+                    client.cancelRemoteKeyboardRequest()
+                    setSettings(false, false)
+                    keyboardTools = true
+                }
+                .popover(isPresented: $keyboardTools) {
+                    VisionKeyboardTools(client: client, shown: keyboardShown, overlay: overlay) {
+                        keyboardTools = false
+                        showKeyboard()
+                    }
+                }
+                .onChange(of: client.active) { _, _ in keyboardTools = false }
+                .onChange(of: client.connectedAt) { _, _ in keyboardTools = false }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase != .active { keyboardTools = false }
+                }
+                #endif
                 .opacity(scaleOpen ? 0 : 1)
                 .allowsHitTesting(!scaleOpen)
                 .tourTarget(.keyboard)
@@ -1299,7 +1428,16 @@ private struct TopBar: View {
         .frame(height: metrics.height)
         .padding(.horizontal, metrics.padding)
         // The bar's colour runs to the screen edge; its contents stay inside the safe area.
+        #if os(visionOS)
+        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+        #else
         .background(Palette.bar.ignoresSafeArea(edges: .top))
+        #endif
+    }
+
+    private func keyboardTapped() {
+        setSettings(false, false)
+        toggleKeyboard()
     }
 
     private func button(open: Bool, symbol: String, label: String, accessibilityLabel: String,
@@ -1445,7 +1583,9 @@ struct TextScaleControl: View {
                     let dx = g.location.x - startX
                     let snapped = Self.snap(startValue + Double(dx / pointsPerStep) * 0.25)
                     if snapped != live {
+        #if !os(visionOS)
                         UISelectionFeedbackGenerator().selectionChanged()
+        #endif
                         withAnimation(.easeOut(duration: 0.1)) { live = snapped }
                     }
                 }
@@ -1553,11 +1693,15 @@ struct WindowStrip: View {
     /// the submenu outside this clipped strip.
     @Binding var menuFor: UInt32?
 
-    /// Press and hold a thumbnail for 1.5 s: it starts to wiggle and its traffic lights (close,
+    /// Press and hold a thumbnail (0.5 s on visionOS, 1.5 s on iPad): it starts to wiggle and its traffic lights (close,
     /// minimize, full screen) appear in a submenu beside it, the way a held Home Screen icon
     /// offers its menu. Keep holding and move: the submenu goes, the thumbnail lifts and drags
     /// into a new slot. The arrangement is the device's own, persisted per Mac. A tap selects.
+    #if os(visionOS)
+    static let holdToOpen: TimeInterval = 0.5
+    #else
     static let holdToOpen: TimeInterval = 1.5
+    #endif
     /// What the tour lights of the strip: its thumbnails' band (the strip is as tall as its bar),
     /// with the active halo's 5 pt above and the app badge's 6 pt below.
     static func tourBand(pad: CGFloat) -> EdgeInsets {
@@ -1592,6 +1736,12 @@ struct WindowStrip: View {
                                             onHold: { openMenu(for: window.id) },
                                             onMove: { t in holdMoved(window: window, index: index, count: windows.count, slot: slot, translation: t) },
                                             onEnd: { holdEnded(window: window) })
+                                #if os(visionOS)
+                                // Give visionOS an explicit thumbnail-sized interaction region
+                                // and native hover feedback for the transparent UIKit overlay.
+                                .contentShape(.interaction, Rectangle())
+                                .hoverEffect(.highlight)
+                                #endif
                         }
                         .offset(x: lifted == window.id ? liftOffset : 0)
                         .zIndex(lifted == window.id ? 1 : 0)
@@ -1636,13 +1786,17 @@ struct WindowStrip: View {
             closeMenu()
             lifted = window.id
             liftStartIndex = index
+        #if !os(visionOS)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
         }
         guard lifted == window.id else { return }
         let shift = Int((t.width / slot).rounded())
         let target = max(0, min(count - 1, liftStartIndex + shift))
         if let current = client.orderedWindows.firstIndex(where: { $0.id == window.id }), current != target {
+        #if !os(visionOS)
             UISelectionFeedbackGenerator().selectionChanged()
+        #endif
             withAnimation(.spring(duration: 0.3, bounce: 0.15)) { client.moveWindow(window.id, to: target) }
         }
         liftOffset = t.width - CGFloat(target - liftStartIndex) * slot
@@ -1657,7 +1811,9 @@ struct WindowStrip: View {
 
     private func openMenu(for id: UInt32) {
         guard menuFor != id else { return }
+        #if !os(visionOS)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
         menuFor = id
     }
 
@@ -1684,6 +1840,16 @@ struct HoldDragOverlay: UIViewRepresentable {
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.held(_:)))
         hold.minimumPressDuration = minimumHold
         hold.allowableMovement = 12        // more than this before the hold fires is a scroll, not a hold
+        #if os(visionOS)
+        let spatialTouches = [UITouch.TouchType.direct.rawValue,
+                              UITouch.TouchType.indirect.rawValue,
+                              UITouch.TouchType.indirectPointer.rawValue].map { NSNumber(value: $0) }
+        tap.allowedTouchTypes = spatialTouches
+        hold.allowedTouchTypes = spatialTouches
+        // A physical primary click-and-hold follows the same path as a hand pinch-and-hold.
+        // The tap must lose once the hold recognizes, so release never also selects the window.
+        tap.require(toFail: hold)
+        #endif
         view.addGestureRecognizer(tap)
         view.addGestureRecognizer(hold)
         return view
@@ -1930,7 +2096,7 @@ struct AppDrawer: View {
                             DrawerRow(height: 50,
                                       highlighted: app.bundleID == activeBundleID,
                                       title: app.name,
-                                      trailing: app.windows.count == 1 ? "1 window" : "\(app.windows.count) windows",
+                                      trailing: app.windows.isEmpty ? "Running" : app.windows.count == 1 ? "1 window" : "\(app.windows.count) windows",
                                       action: { show(app) }) {
                                 AppIcon(image: client.icons[app.bundleID], name: app.name,
                                         size: 32, radius: 9, fontSize: 12)
@@ -2010,24 +2176,27 @@ struct AppDrawer: View {
 
     /// Running apps, grouped from the window list and kept in its front-to-back order.
     private var openApps: [OpenApp] {
-        var order: [String] = []
-        var names: [String: String] = [:]
-        var grouped: [String: [WindowInfo]] = [:]
-        for window in client.windows {
-            if grouped[window.bundleID] == nil {
-                order.append(window.bundleID)
-                names[window.bundleID] = window.appName
-            }
-            grouped[window.bundleID, default: []].append(window)
-        }
-        return order.map { OpenApp(bundleID: $0, name: names[$0] ?? $0, windows: grouped[$0] ?? []) }
-            .filter { matches($0.name) }
+        let inventory: [AppInfo]?
+        #if os(visionOS)
+        inventory = client.runningApps
+        #else
+        inventory = nil
+        #endif
+        return AppInventory.openApps(windows: client.windows, runningApps: inventory).map { app in
+            OpenApp(bundleID: app.bundleID, name: app.name,
+                    windows: client.windows.filter { $0.bundleID == app.bundleID })
+        }.filter { matches($0.name) }
     }
 
     private var closedApps: [AppInfo] {
+        #if os(visionOS)
+        let running = Set(AppInventory.openApps(windows: client.windows, runningApps: client.runningApps).map(\.bundleID))
+        #else
         let running = Set(client.windows.map(\.bundleID))
+        #endif
+        var seen = Set<String>()
         return client.apps
-            .filter { !running.contains($0.bundleID) && matches($0.name) }
+            .filter { !running.contains($0.bundleID) && seen.insert($0.bundleID).inserted && matches($0.name) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -2043,14 +2212,25 @@ struct AppDrawer: View {
 
     /// First window of the app, or the next one if this app is already showing.
     private func show(_ app: OpenApp) {
-        guard !app.windows.isEmpty else { return }
+        guard !app.windows.isEmpty else {
+            #if os(visionOS)
+            guard client.connected, client.runningApps?.contains(where: { $0.bundleID == app.bundleID }) == true else { return }
+            client.launch(bundleID: app.bundleID)
+            drawerOpen = false
+            #endif
+            return
+        }
         var target = app.windows[0]
         if case .window(let id) = client.active,
            let index = app.windows.firstIndex(where: { $0.id == id }) {
             target = app.windows[(index + 1) % app.windows.count]
         }
         client.select(.window(target.id))
+        #if os(visionOS)
+        drawerOpen = false
+        #else
         withAnimation(.easeOut(duration: 0.18)) { drawerOpen = false }
+        #endif
     }
 }
 
@@ -2115,3 +2295,140 @@ extension PhonePortraitLayout.Streaming {
         }
     }
 }
+
+// The visual hierarchy is shared; only the native spatial input lifecycle needs this fence.
+private struct SpatialInputAllowedKey: EnvironmentKey {
+    static let defaultValue = true
+}
+extension EnvironmentValues {
+    var spatialInputAllowed: Bool {
+        get { self[SpatialInputAllowedKey.self] }
+        set { self[SpatialInputAllowedKey.self] = newValue }
+    }
+}
+struct SpatialInputContext: Equatable {
+    var session: Date? = nil
+    var source: StreamSource = .none
+    var mouseMode = false
+}
+private struct SpatialInputContextKey: EnvironmentKey {
+    static let defaultValue = SpatialInputContext()
+}
+extension EnvironmentValues {
+    var spatialInputContext: SpatialInputContext {
+        get { self[SpatialInputContextKey.self] }
+        set { self[SpatialInputContextKey.self] = newValue }
+    }
+}
+private struct SpatialInputBoundary: ViewModifier {
+    @ObservedObject var client: StreamClient
+    @Environment(\.spatialInputAllowed) private var allowed
+    func body(content: Content) -> some View {
+        #if os(visionOS)
+        content
+            .environment(\.spatialInputContext, SpatialInputContext(session: client.connectedAt, source: client.active, mouseMode: client.visionMouseMode))
+            .allowsHitTesting(allowed)
+        #else
+        content
+        #endif
+    }
+}
+extension View {
+    func spatialInputBoundary(client: StreamClient) -> some View {
+        modifier(SpatialInputBoundary(client: client))
+    }
+}
+extension StreamClient {
+    var surfacePointerSender: (CGPoint?, PointerPresence.Origin) -> Void {
+        #if os(visionOS)
+        let session = connectedAt, source = active
+        return { [weak self] point, origin in
+            guard let self, self.connected, session != nil, session == self.connectedAt, source != .none, source == self.active else { return }
+            if point != nil && self.inputPaused { return }
+            self.setOwnPointer(point, from: origin)
+        }
+        #else
+        return { self.setOwnPointer($0, from: $1) }
+        #endif
+    }
+
+    /// A delayed callback belongs to the source and session that created its input surface.
+    var surfaceInputSender: (InputEvent) -> Void {
+        #if os(visionOS)
+        let session = connectedAt, source = active
+        return { [weak self] event in
+            guard let self,
+                  VisionSurfaceInputPolicy.accepts(event, allowed: true, session: session,
+                      currentSession: self.connectedAt, connected: self.connected,
+                      source: source, currentSource: self.active) else { return }
+            self.sendInput(event)
+        }
+        #else
+        return { self.sendInput($0) }
+        #endif
+    }
+}
+
+#if os(visionOS)
+extension View {
+    /// One physical interaction has exactly one outcome. Keeping the Button underneath preserves
+    /// its ordinary accessibility activation; the named action also makes the tools discoverable.
+    func visionKeyboardToolsGesture(tap: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
+        highPriorityGesture(
+            LongPressGesture(minimumDuration: 0.5)
+                .exclusively(before: TapGesture())
+                .onEnded { result in
+                    switch result {
+                    case .first(true): hold()
+                    case .second: tap()
+                    default: break
+                    }
+                }
+        )
+        .accessibilityAction(named: "Keyboard and paste tools", hold)
+    }
+}
+
+/// System paste consent, with no clipboard subscription or composition field.
+struct VisionKeyboardTools: View {
+    @ObservedObject var client: StreamClient
+    let shown: Bool
+    let overlay: InputOverlayProxy
+    let toggle: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var active = false
+    @State private var epoch = UUID()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button("Right-click last point") { overlay.rightClick(client: client) }
+                .disabled(overlay.spatialTarget?.context != SpatialInputContext(session: client.connectedAt, source: client.active, mouseMode: client.visionMouseMode))
+            Text("Select a remote text field, then tap Keyboard in the toolbar to type. Tap Keyboard again to release typing. Opening these tools suspends input.")
+                .font(.caption).foregroundStyle(.secondary)
+            let session = client.connectedAt
+            let source = client.active
+            let request = epoch
+            let focus = overlay.focusEpoch
+            PasteButton(payloadType: String.self) { strings in
+                DispatchQueue.main.async {
+                    guard active, epoch == request, overlay.focusEpoch == focus,
+                          overlay.view?.window?.isKeyWindow == true,
+                          UIApplication.shared.applicationState == .active,
+                          scenePhase == .active, client.connected,
+                          client.connectedAt == session, client.active == source else { return }
+                    if let text = strings.first(where: { !$0.isEmpty }), text.utf8.count <= Clipboard.maxTextBytes {
+                        client.sendInput(.text(text))
+                    }
+                }
+            }
+            .accessibilityLabel("Paste Text into the Mac")
+            Text("Click the Mac field first. Copy text on your other Apple device, then tap Paste Text here. This types plain text into the current Mac control.")
+                .font(.caption).foregroundStyle(.secondary)
+        }.padding(24).frame(width: 340)
+        .onAppear { active = true }
+        .onDisappear { active = false; epoch = UUID() }
+        .onChange(of: client.active) { _, _ in epoch = UUID() }
+        .onChange(of: client.connectedAt) { _, _ in epoch = UUID() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { active = false; epoch = UUID() } }
+    }
+}
+#endif
