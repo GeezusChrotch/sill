@@ -2,9 +2,22 @@ import SwiftUI
 
 @main
 struct SillVisionApp: App {
+    private var initialSize: CGSize {
+        #if DEBUG
+        if let spec = LayoutHarness.Spec.fromLaunchArguments { return spec.size }
+        #endif
+        return VisionWindowSizePolicy.login
+    }
+
     var body: some Scene {
         WindowGroup {
             VisionSessionView()
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: initialSize.width, height: initialSize.height)
+
+        WindowGroup("Sill", id: "sill-session", for: UUID.self) { $windowID in
+            VisionSessionView(windowID: windowID)
         }
         .windowStyle(.plain)
         .defaultSize(width: 1200, height: 800)

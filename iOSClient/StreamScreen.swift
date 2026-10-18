@@ -102,6 +102,14 @@ enum DuoLayout {
 
 struct StreamScreen: View {
     @ObservedObject var client: StreamClient
+    #if os(visionOS)
+    @SceneStorage("Sill.spatialToolbarPosition") private var spatialToolbarPosition = "top"
+    @SceneStorage("Sill.spatialToolbarHidden") private var spatialToolbarHidden = false
+    @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
+    @State private var spatialTextSizeOpen = false
+    @Environment(\.accessibilityVoiceOverEnabled) private var spatialVoiceOver
+    @Environment(\.openWindow) private var openSpatialWindow
+    #endif
     @State private var drawerOpen = false
     @State private var keyboardShown = false
     @State private var keyboardToolsOpen = false
@@ -238,6 +246,9 @@ struct StreamScreen: View {
                 && PhonePortraitLayout.offersLargerPicture(screen: geo.size)
             ZStack {
                 Group {
+                    #if os(visionOS)
+                    spatialLayout(size: geo.size)
+                    #else
                     switch duo {
                     case .innerLandscape:
                         landscape(bar: .regular, width: geo.size.width, fold: posture.info(in: geo.size))
@@ -248,6 +259,7 @@ struct StreamScreen: View {
                     case .outerPortrait:
                         portrait(metrics: DuoLayout.phoneArrangement ? .phone : .compact, largerKeyboard: largerKeyboard)
                     }
+                    #endif
                 }
                 // Under the pairing overlay and the tour nothing takes a touch: not the bar, and
                 // not the stream's UIKit input view (nor, so, the Pencil, a hover or a key).
@@ -317,6 +329,11 @@ struct StreamScreen: View {
             .duoFold(posture, size: geo.size, screen: "stream screen")
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
+            #if os(visionOS)
+            .environment(\.visionToolbarPosition, $spatialToolbarPosition)
+            .environment(\.visionToolbarAutomatic, $spatialToolbarAutomatic)
+            .onChange(of: spatialToolbarPosition) { _, _ in closeWindowMenu(); scaleOpen = false; spatialTextSizeOpen = false }
+            #endif
             #if DEBUG
             // The console's line for the gates: what Larger Picture's rule made of the switch and of
             // what streams, on a phone held upright, each time one of them or the outcome changes.
@@ -334,6 +351,15 @@ struct StreamScreen: View {
                                  command: { action in client.command(action, window: id); closeWindowMenu() },
                                  dismiss: closeWindowMenu,
                                  alwaysBelow: DuoLayout.drawsPhone)
+                    #if os(visionOS)
+                    .environment(\.openSpatialSource, { source in
+                        guard let seed = client.spatialWindowSeed(source: source) else { return }
+                        let id = VisionWindowLaunches.shared.register(seed)
+                        closeWindowMenu()
+                        openSpatialWindow(id: "sill-session", value: id)
+                    })
+                    .environment(\.spatialSourceCanOpen, client.spatialWindowSeed(source: .window(id)) != nil)
+                    #endif
             }
         }
         #if !os(visionOS)
@@ -548,6 +574,15 @@ struct StreamScreen: View {
         let defaults = UserDefaults.standard
         #if os(visionOS)
         if defaults.bool(forKey: "SillMouseMode") { client.visionMouseMode = true }
+        if let position = defaults.string(forKey: "SillToolbar"), ["top", "left"].contains(position) {
+            spatialToolbarPosition = position
+        }
+        if defaults.object(forKey: "SillToolbarAutomatic") != nil {
+            spatialToolbarAutomatic = defaults.bool(forKey: "SillToolbarAutomatic")
+        }
+        if defaults.object(forKey: "SillToolbarHidden") != nil {
+            spatialToolbarHidden = defaults.bool(forKey: "SillToolbarHidden")
+        }
         #endif
         let live = !client.mockDiscovery
         func after(_ seconds: Double, _ step: @escaping () -> Void) {
@@ -1092,6 +1127,95 @@ struct StreamScreen: View {
         }
     }
 
+    #if os(visionOS)
+    private func spatialLayout(size: CGSize) -> some View {
+        let sidebar = spatialToolbarPosition == "left"
+        let arrangement = sidebar ? AnyLayout(HStackLayout(spacing: 24)) : AnyLayout(VStackLayout(spacing: 24))
+        return arrangement {
+            if !spatialToolbarHidden {
+                if sidebar {
+                    VStack(spacing: 8) {
+                        ScrollView(.vertical) {
+                            spatialToolbar(sidebar: true, thumbnailHeight: min(200, max(100, size.height - 680)))
+                        }
+                            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                            .modifier(VisionToolbarReveal(automatic: spatialToolbarAutomatic && !spatialToolbarPinned, reduceMotion: reduceMotion))
+                        spatialVisibilityButton(hidden: false)
+                            .padding(.bottom, 8)
+                    }
+                    .frame(width: 132)
+                    .hoverEffectGroup()
+                } else {
+                    HStack(spacing: 0) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            spatialToolbar(sidebar: false)
+                                // Fix the offered width so the thumbnail strip scrolls within
+                                // its budget instead of pushing Desktop and Settings offscreen.
+                                .frame(width: max(750, size.width - 60))
+                        }
+                        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+                        .modifier(VisionToolbarReveal(automatic: spatialToolbarAutomatic && !spatialToolbarPinned, reduceMotion: reduceMotion))
+                        spatialVisibilityButton(hidden: false)
+                    }
+                    .frame(height: BarMetrics.regular.height)
+                    .hoverEffectGroup()
+                }
+            }
+            contentArea(bar: .regular)
+                .overlay(alignment: sidebar ? .leading : .topTrailing) {
+                    if spatialToolbarHidden {
+                        spatialVisibilityButton(hidden: true).padding(12)
+                    }
+                }
+        }
+    }
+
+    private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200) -> some View {
+        TopBar(client: client, metrics: .regular, drawerOpen: $drawerOpen,
+               keyboardShown: $keyboardShown, textScale: $textScale, scaleOpen: $scaleOpen,
+               windowMenu: $windowMenu, settingsOpen: settingsOpen, menusFit: true,
+               toggleKeyboard: { client.cancelRemoteKeyboardRequest(); overlay.toggleKeyboard() },
+               setSettings: { setSettings($0, restoreKeyboard: $1) },
+               menusOpened: menusOpened, menusClosed: menusClosed,
+               keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() }, overlay: overlay,
+               vertical: sidebar, textSizeTools: $spatialTextSizeOpen, thumbnailHeight: thumbnailHeight)
+    }
+
+    private var spatialToolbarPinned: Bool {
+        settingsOpen || drawerOpen || menusOpen || scaleOpen || spatialTextSizeOpen || keyboardToolsOpen || windowMenu != nil || tour != nil || spatialVoiceOver
+    }
+
+    private func hideSpatialToolbar() {
+        closeWindowMenu(); scaleOpen = false; keyboardToolsOpen = false; spatialTextSizeOpen = false
+        drawerOpen = false; setSettings(false)
+        spatialToolbarHidden = true
+    }
+
+    private func spatialVisibilityButton(hidden: Bool) -> some View {
+        let title = hidden ? "Show toolbar" : spatialToolbarAutomatic ? "Always show toolbar" : "Hide toolbar"
+        return Button {
+            if hidden { spatialToolbarHidden = false; spatialToolbarAutomatic = false }
+            else if spatialToolbarAutomatic { spatialToolbarAutomatic = false }
+            else { hideSpatialToolbar() }
+        } label: {
+            Label(title, systemImage: hidden ? "sidebar.left" : spatialToolbarAutomatic ? "pin" : "chevron.compact.up")
+                .labelStyle(.iconOnly)
+                .frame(width: 44, height: 44)
+                .frame(width: 60, height: 60)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .hoverEffect(.highlight)
+        .help(title)
+        .contextMenu {
+            Button("Always show toolbar", systemImage: "pin") { spatialToolbarHidden = false; spatialToolbarAutomatic = false }
+            Button("Show when looking", systemImage: "eye") { spatialToolbarHidden = false; spatialToolbarAutomatic = true }
+            Button("Hide toolbar", systemImage: "sidebar.left") { hideSpatialToolbar() }
+        }
+    }
+    #endif
+
     private static var nativeToolbarButtons: Int {
         #if os(visionOS)
         7
@@ -1337,12 +1461,16 @@ private struct TopBar: View {
     @Binding var keyboardTools: Bool
     let showKeyboard: () -> Void
     let overlay: InputOverlayProxy
+    var vertical = false
+    var textSizeTools: Binding<Bool> = .constant(false)
+    var thumbnailHeight: CGFloat = 200
     #if os(visionOS)
     @Environment(\.scenePhase) private var scenePhase
     #endif
 
     var body: some View {
-        HStack(spacing: metrics.gap) {
+        let arrangement = vertical ? AnyLayout(VStackLayout(spacing: metrics.gap)) : AnyLayout(HStackLayout(spacing: metrics.gap))
+        arrangement {
             button(open: drawerOpen, symbol: "magnifyingglass", label: "Apps",
                    accessibilityLabel: drawerOpen ? "Close the app list" : "Open the app list",
                    action: {
@@ -1352,10 +1480,13 @@ private struct TopBar: View {
 
             WindowStrip(client: client, width: metrics.thumbWidth, height: metrics.thumbHeight,
                         radius: metrics.thumbRadius, spacing: metrics.thumbSpacing,
-                        pad: metrics.thumbPad, fade: metrics.thumbFade, menuFor: $windowMenu)
+                        pad: metrics.thumbPad, fade: metrics.thumbFade, menuFor: $windowMenu, vertical: vertical)
                 .opacity(scaleOpen ? 0.2 : 1)      // the ruler is centred on Aa and reaches over the strip's end
                 .allowsHitTesting(!scaleOpen)
-                .frame(width: stripWidth)
+                .frame(width: vertical ? metrics.thumbWidth + 16 : stripWidth, height: vertical ? thumbnailHeight : nil)
+                #if os(visionOS)
+                .frame(minWidth: vertical ? nil : 160)
+                #endif
                 .tourTarget(.strip, inset: WindowStrip.tourBand(pad: metrics.thumbPad))
             // The book pose: the fold's band, and nothing on it, between the strip and the buttons.
             if stripWidth != nil { Spacer(minLength: 0) }
@@ -1374,10 +1505,28 @@ private struct TopBar: View {
             // Text size: the host sizes the Mac window to the panel divided by this scale, so a
             // bigger number means a smaller Mac window and bigger text here. The slider unfolds to
             // the right, over the two buttons after it, which fade while it is open.
+            #if os(visionOS)
+            if vertical {
+                button(open: textSizeTools.wrappedValue, symbol: "textformat.size", label: "Text size",
+                       accessibilityLabel: "Text size in this window") { textSizeTools.wrappedValue.toggle() }
+                    .popover(isPresented: textSizeTools) {
+                        VisionTextSizePicker(scale: $textScale)
+                    }
+                    .tourTarget(.textSize)
+            } else {
             TextScaleControl(scale: $textScale, open: $scaleOpen,
                              width: metrics.buttonWidth, height: metrics.buttonHeight,
                              pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
                 .tourTarget(.textSize)
+
+            }
+            #else
+            TextScaleControl(scale: $textScale, open: $scaleOpen,
+                             width: metrics.buttonWidth, height: metrics.buttonHeight,
+                             pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
+                .tourTarget(.textSize)
+
+            #endif
 
             #if os(visionOS)
             VisionMouseModeButton(client: client, width: metrics.buttonWidth, height: metrics.buttonHeight, spacing: metrics.buttonSpacing)
@@ -1425,11 +1574,12 @@ private struct TopBar: View {
         }
         .animation(.easeOut(duration: 0.16), value: scaleOpen)
         .animation(.easeOut(duration: 0.18), value: client.menus.hasMenus)
-        .frame(height: metrics.height)
-        .padding(.horizontal, metrics.padding)
+        .frame(height: vertical ? nil : metrics.height)
+        .padding(.horizontal, vertical ? 8 : metrics.padding)
+        .padding(.vertical, vertical ? 8 : 0)
         // The bar's colour runs to the screen edge; its contents stay inside the safe area.
         #if os(visionOS)
-        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+        .background(.clear)
         #else
         .background(Palette.bar.ignoresSafeArea(edges: .top))
         #endif
@@ -1692,6 +1842,7 @@ struct WindowStrip: View {
     /// Which thumbnail has its traffic-light submenu open. Owned by the screen root, which draws
     /// the submenu outside this clipped strip.
     @Binding var menuFor: UInt32?
+    var vertical = false
 
     /// Press and hold a thumbnail (0.5 s on visionOS, 1.5 s on iPad): it starts to wiggle and its traffic lights (close,
     /// minimize, full screen) appear in a submenu beside it, the way a held Home Screen icon
@@ -1713,9 +1864,10 @@ struct WindowStrip: View {
 
     var body: some View {
         let windows = client.orderedWindows
-        let slot = width + spacing
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: spacing) {
+        let slot = (vertical ? height : width) + spacing
+        let arrangement = vertical ? AnyLayout(VStackLayout(spacing: spacing)) : AnyLayout(HStackLayout(spacing: spacing))
+        ScrollView(vertical ? .vertical : .horizontal, showsIndicators: false) {
+            arrangement {
                 ForEach(Array(windows.enumerated()), id: \.element.id) { index, window in
                     WindowThumbnail(window: window,
                                     image: client.thumbnails[window.id],
@@ -1743,11 +1895,15 @@ struct WindowStrip: View {
                                 .hoverEffect(.highlight)
                                 #endif
                         }
-                        .offset(x: lifted == window.id ? liftOffset : 0)
+                        .offset(x: !vertical && lifted == window.id ? liftOffset : 0,
+                                y: vertical && lifted == window.id ? liftOffset : 0)
                         .zIndex(lifted == window.id ? 1 : 0)
                         // The lifted thumbnail follows the finger: its slot change must not animate,
                         // or the layout springs one way while the compensating offset jumps the other.
                         .transaction { if lifted == window.id { $0.animation = nil } }
+                        #if os(visionOS)
+                        .accessibilityAction(named: "Window actions") { openMenu(for: window.id) }
+                        #endif
                 }
             }
             .padding(.vertical, pad)
@@ -1759,7 +1915,7 @@ struct WindowStrip: View {
         .mask(LinearGradient(stops: [.init(color: .black, location: 0),
                                      .init(color: .black, location: fade),
                                      .init(color: .clear, location: 1)],
-                             startPoint: .leading, endPoint: .trailing))
+                             startPoint: vertical ? .top : .leading, endPoint: vertical ? .bottom : .trailing))
         .onChange(of: client.windows) { _, now in
             // A window that closed or minimized takes its menu, and any drag, with it.
             if let id = menuFor, !now.contains(where: { $0.id == id }) { closeMenu() }
@@ -1791,7 +1947,8 @@ struct WindowStrip: View {
         #endif
         }
         guard lifted == window.id else { return }
-        let shift = Int((t.width / slot).rounded())
+        let travel = vertical ? t.height : t.width
+        let shift = Int((travel / slot).rounded())
         let target = max(0, min(count - 1, liftStartIndex + shift))
         if let current = client.orderedWindows.firstIndex(where: { $0.id == window.id }), current != target {
         #if !os(visionOS)
@@ -1799,7 +1956,7 @@ struct WindowStrip: View {
         #endif
             withAnimation(.spring(duration: 0.3, bounce: 0.15)) { client.moveWindow(window.id, to: target) }
         }
-        liftOffset = t.width - CGFloat(target - liftStartIndex) * slot
+        liftOffset = travel - CGFloat(target - liftStartIndex) * slot
     }
 
     /// The finger lifted after a hold: drop the thumbnail (the submenu, if open, stays).
@@ -1899,7 +2056,13 @@ struct WindowLightsMenu: View {
     /// arrangement); otherwise they go on the side of the screen's middle away from it.
     var alwaysBelow: (CGSize) -> Bool = { _ in false }
 
+    #if os(visionOS)
+    @Environment(\.openSpatialSource) private var openSpatialSource
+    @Environment(\.spatialSourceCanOpen) private var spatialSourceCanOpen
+    private static let size = CGSize(width: 280, height: 164)
+    #else
     private static let size = CGSize(width: 214, height: 62)
+    #endif
     /// The Duo's hinge (iOS 27.1): the lights keep off its fold.
     @Environment(\.duoEnvironment) private var duoEnvironment
 
@@ -1916,10 +2079,25 @@ struct WindowLightsMenu: View {
             let below = at.below, x = at.x, y = at.y
             ZStack {
                 Color.clear.contentShape(Rectangle()).onTapGesture(perform: dismiss)
-                HStack(spacing: 6) {
+                VStack(spacing: 8) {
+                    HStack(spacing: 6) {
                     light(.close, Color(hex: 0xFF5F57), "xmark", "Close")
                     light(.minimize, Color(hex: 0xFEBC2E), "minus", "Minimize")
                     light(.fullScreen, Color(hex: 0x28C840), "arrow.up.left.and.arrow.down.right", "Full Screen")
+                    }
+                    #if os(visionOS)
+                    Button("Open as own window", systemImage: "rectangle.on.rectangle") {
+                        openSpatialSource?(.window(window.id))
+                    }
+                    .disabled(!spatialSourceCanOpen || openSpatialSource == nil)
+                    .help("Open the full Sill interface in another window")
+                    if !spatialSourceCanOpen {
+                        Text("Requires an updated Sill Mac and a paired connection.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    #endif
                 }
                 .padding(.horizontal, 10)
                 .frame(width: w, height: h)

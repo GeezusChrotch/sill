@@ -63,12 +63,15 @@ public struct WindowList: Codable {
     /// rebases.
     public var editableFocus: Int?
     public var clipboard: Int?
+    /// Generation 1 acknowledges this connection owns an independent source, encoder and viewport.
+    /// Nil on a shared/legacy session, even on a host which can accept an independent hello.
+    public var independentSessions: Int?
 
     public init(macName: String, windows: [WindowInfo], active: StreamSource, launchID: String? = nil,
-                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil, runningApps: [AppInfo]? = nil, editableFocus: Int? = nil) {
+                hostVersion: String? = nil, protocol: Int? = nil, gestures: Int? = nil, clipboard: Int? = nil, runningApps: [AppInfo]? = nil, editableFocus: Int? = nil, independentSessions: Int? = nil) {
         self.macName = macName; self.windows = windows; self.active = active; self.launchID = launchID
         self.hostVersion = hostVersion; self.protocol = `protocol`; self.gestures = gestures
-        self.clipboard = clipboard; self.runningApps = runningApps; self.editableFocus = editableFocus
+        self.clipboard = clipboard; self.runningApps = runningApps; self.editableFocus = editableFocus; self.independentSessions = independentSessions
     }
 }
 

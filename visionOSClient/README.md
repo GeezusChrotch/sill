@@ -1,10 +1,10 @@
 # Native visionOS client
 
 SillVision is a native visionOS 2+ app, built from the shared iPad client source
-and StreamProtocol package. It presents one resizable spatial window with a single
-selected Mac window or Desktop stream. It does not provide multiple independent
-spatial streams, immersive spaces or audio. This is a partial contribution toward
-the visionOS request in issue #119; separate Mac windows in space remain future work.
+and StreamProtocol package. Each spatial scene presents its own selected Mac window
+or Desktop stream with the full Sill controls. The updated host supports up to four
+independent scenes; hold a window preview and choose Open as own window. Immersive
+spaces and audio are not included. This is a development contribution toward issue #119.
 
 The owner reports the 0.14.0 (14) development build works well on Vision Pro.
 That usability report is not exhaustive feature parity or device acceptance for
@@ -56,8 +56,8 @@ do not connect to a Mac or run remote commands.
 
 `SillVisionApp` → `VisionSessionView` → shared `ContentView` is the active UI.
 It retains discovery, Apps, thumbnails/window actions, Mac menus, text scale,
-settings, pairing, tour and clipboard controls. Resizing selects the shared
-landscape or portrait arrangement. visionOS adaptations are guarded in the shared
+settings, pairing, tour and clipboard controls. The native toolbar can sit above
+or to the left of the picture, with system hover reveal or explicit visibility. visionOS adaptations are guarded in the shared
 source; normal iPhone/iPad builds retain their platform behavior.
 
 Touch mode maps hand taps to clicks and pans to scrolling. A stationary hold and
@@ -83,8 +83,11 @@ The host changes are part of this contribution:
 
 Existing message numbers and required payloads remain unchanged. New catalog
 fields are optional. The shared catalog/host changes also affect iOS clients,
-so iPhone/iPad regression review is needed. One host still has one shared active
-source; additional client connections do not become independent window streams.
+so iPhone/iPad regression review is needed. Legacy clients retain their shared
+source. Vision clients opt into connection-owned capture and encoder pipelines;
+see [independent sessions](../docs/independent-sessions.md) for admission, input,
+physical window fitting, and Virtual Display limitations. An older host can serve
+the primary scene, but opening or restoring an independent scene requires the new host.
 
 Earlier prototype views (`VisionAppLauncher`, `VisionHelp`, `VisionHostSettings`,
 `VisionMacMenus`/`VisionMacMenuButton`, `VisionStreamSurface`) and their input
@@ -123,3 +126,35 @@ playback and sustained latency, home/remote pairing and reconnect, old-host
 fallback, and cross-Space/minimized-window selection. Check iPhone/iPad behavior
 with both released and updated hosts. No exhaustive matrix of these combinations
 has been completed, and no public visionOS release is claimed here.
+
+
+### Spatial windows and toolbar (0.16 candidate)
+
+Each “Open as own window” scene owns the full Sill interface and a separate client. A scene value
+contains only a random UUID; its paired-host seed remains in memory for at most 60 seconds. A
+restored auxiliary scene without that seed shows discovery and requires a manual Mac selection.
+Only the owning UIKit scene's disconnect notification stops its client. Ordinary SwiftUI
+appear/disappear and a sibling taking focus do not disconnect another stream.
+
+Toolbar position, automatic reveal, and manual visibility are saved per scene. Settings offers
+Top / Left side and Show toolbar when looking. The always-visible tab pins the toolbar; its menu
+also offers explicit Hide. With automatic reveal enabled, the system hover compositor clips the
+content and glass while keeping the stream viewport stable. No gaze state enters app code.
+VoiceOver and open toolbar interactions keep the toolbar visible. Sidebar text size uses a native
+popover so the horizontal ruler cannot be clipped by the narrow sidebar.
+
+The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
+only its own UIWindowScene and requests a bounded preferred size once per connected Mac-window
+selection. Mac-window sizing freezes the catalog's point size before sending the source request;
+a secondary scene carries its parent's pre-launch snapshot through the opaque in-memory seed. The first Desktop after connecting gets a comfortable 1200 × 800 point default; later Desktop
+picks keep the current native size because the protocol has no source-bound Desktop dimensions.
+It never reuses a previous window's encoded size. Later video/catalog changes and manual scene resizing do not
+retrigger fitting. Tiny and
+extreme-aspect sources can have letterboxing within the system's minimum window size. A new
+connection/source selection starts a new sizing decision. Geometry requests remain system
+preferences and can be declined.
+
+Debug visual checks can use `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1`, and
+`-SillToolbarHidden 0|1` with the existing layout harness. The pure sizing check is
+`Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input
+still require Vision Pro acceptance.

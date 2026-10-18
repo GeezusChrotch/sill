@@ -50,6 +50,8 @@ struct HostSettingsPanel: View {
     /// This device's switch for the clipboard (docs/clipboard-plan.md): on unless turned off, read by
     /// StreamClient+Clipboard at each decision; a change subscribes or stops at once.
     #if os(visionOS)
+    @Environment(\.visionToolbarPosition) private var toolbarPosition
+    @Environment(\.visionToolbarAutomatic) private var toolbarAutomatic
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = false
     #else
     @AppStorage(StreamClient.clipboardKey) private var clipboardOn = true
@@ -482,6 +484,23 @@ struct HostSettingsPanel: View {
             .padding(.bottom, 6)
             .accessibilityAddTraits(.isHeader)
             .id(Self.gesturesGroupID)
+        #if os(visionOS)
+        if let toolbarPosition {
+            Rows {
+                Picker("Toolbar position", selection: toolbarPosition) {
+                    Text("Top").tag("top")
+                    Text("Left side").tag("left")
+                }
+                .rowFrame()
+            }
+            if let toolbarAutomatic {
+                Rows {
+                    Toggle("Show toolbar when looking", isOn: toolbarAutomatic).rowFrame()
+                }
+            }
+            Footnote(text: "Look toward the toolbar to reveal it. Pin it to keep it visible. These choices are saved separately for each Sill window.")
+        }
+        #endif
         if offersLargerPicture {
             Rows {
                 Toggle(isOn: $largerPicture) {

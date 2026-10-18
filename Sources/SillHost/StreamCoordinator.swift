@@ -45,7 +45,40 @@ package final class StreamCoordinator {
     /// `--synthetic`: the Desktop source streams a test pattern instead of the screen.
     let synthetic: Bool
     let syntheticCapture = SyntheticCapture()
-    let injector = InputInjector()
+    let injector: InputInjector
+    private weak var pipelineParent: StreamCoordinator?
+    private var independentCoordinators: [ObjectIdentifier: StreamCoordinator] = [:]
+    private var isIndependent: Bool { pipelineParent != nil }
+    private let pipelineID = UUID()
+    /// The physical Mac window has one size even when several streams watch it. Its first viewer
+    /// owns fitting; its original placement stays in one ledger until its last viewer leaves.
+    private final class PhysicalWindows {
+        var selections: [UUID: Set<UInt32>] = [:]
+        var fitOwners: [UInt32: UUID] = [:]
+        var staging: [UUID: UInt32] = [:]
+        var ledger = WindowRestore.Ledger<WindowSizer.Placement>()
+        func reserve(_ id: UInt32, for owner: UUID) {
+            selections[owner, default: []].insert(id)
+            if fitOwners[id] == nil { fitOwners[id] = owner }
+        }
+        func retain(_ source: StreamSource, for owner: UUID) {
+            let keep: Set<UInt32>
+            if case .window(let id) = source { keep = [id] } else { keep = [] }
+            selections[owner] = keep.isEmpty ? nil : keep
+            for id in Array(fitOwners.keys) where fitOwners[id] == owner && !keep.contains(id) {
+                fitOwners[id] = selections.first(where: { $0.value.contains(id) })?.key
+            }
+        }
+        func others(_ owner: UUID) -> Set<UInt32> {
+            selections.filter { $0.key != owner }.values.reduce(into: Set<UInt32>()) { $0.formUnion($1) }
+        }
+    }
+    private let physicalWindows: PhysicalWindows
+    private weak var inputCoordinator: StreamCoordinator?
+    private var inputDevice: ObjectIdentifier?
+    private let menuFocusFence: MenuFocusFence
+    private var inputRevision = UUID()
+    private var scrollPhases: [ObjectIdentifier: ScrollPhase] = [:]
     private struct EditableClick {
         let id = UUID()
         let device: ObjectIdentifier
@@ -187,7 +220,10 @@ package final class StreamCoordinator {
     /// The windows Sill sized for a device in regular mode, each with its way back (WindowRestore,
     /// issue #57): recorded at the first fit (`fitToViewport`), put back when the window stops
     /// streaming (`restoreFits`), handed to the virtual display's stage when it takes the window.
-    private var fits = WindowRestore.Ledger<WindowSizer.Placement>()
+    private var fits: WindowRestore.Ledger<WindowSizer.Placement> {
+        get { physicalWindows.ledger }
+        set { physicalWindows.ledger = newValue }
+    }
     /// The window streaming in regular mode was in full screen when the catalog last listed it (its
     /// frame covered a display), or when it was picked: off the list, it may be leaving full screen
     /// (`windowsChanged`, WindowRestore.keepsStreaming).
@@ -297,10 +333,22 @@ package final class StreamCoordinator {
     /// hook that bears on who gets in or what pairing needs (§4.3): with it false, or on a host
     /// that advertises, those hooks are ignored with one line each. `hostVersion`: Sill.app's
     /// version for the window lists, when it has one that parses.
-    package init(config: HostConfig, synthetic: Bool = false, appKitLoop: Bool, remote: RemoteAccess? = nil,
+    package convenience init(config: HostConfig, synthetic: Bool = false, appKitLoop: Bool, remote: RemoteAccess? = nil,
                  homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil) throws {
+        try self.init(config: config, synthetic: synthetic, appKitLoop: appKitLoop, remote: remote,
+                      homePairing: homePairing, testHooks: testHooks, hostVersion: hostVersion,
+                      pipelineServer: nil, pipelineParent: nil)
+    }
+
+    private init(config: HostConfig, synthetic: Bool = false, appKitLoop: Bool, remote: RemoteAccess? = nil,
+                 homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil,
+                 pipelineServer: StreamServer? = nil, pipelineParent: StreamCoordinator? = nil) throws {
         var config = config.validated()
-        if !appKitLoop { config.virtualDisplay = false }
+        if !appKitLoop || pipelineParent != nil { config.virtualDisplay = false }
+        self.pipelineParent = pipelineParent
+        injector = pipelineParent?.injector ?? InputInjector()
+        physicalWindows = pipelineParent?.physicalWindows ?? PhysicalWindows()
+        menuFocusFence = pipelineParent?.menuFocusFence ?? MenuFocusFence()
         self.config = config
         self.synthetic = synthetic
         self.appKitLoop = appKitLoop
@@ -322,7 +370,7 @@ package final class StreamCoordinator {
             }
         }
         // The test pattern is for test clients, not devices.
-        server = try StreamServer(advertise: !synthetic, home: home, testHooks: testHooks)
+        server = try pipelineServer ?? StreamServer(advertise: !synthetic, home: home, testHooks: testHooks)
         server.macName = macName                           // the update goodbye names this Mac (DeviceGate)
         TestHooks.reportIgnored(testHost: server.isTestHost)
         // A host that does not advertise, `--synthetic` in the CLI and in the app alike (as
@@ -332,10 +380,10 @@ package final class StreamCoordinator {
         gesturesDry = synthetic                            // a test host never posts a gesture (§7.4)
         testHotKeys = synthetic ? Self.testHotKeyTable() : nil
         menus = MenuMirror(server: server)
-        let launch = UUID().uuidString
+        let launch = pipelineParent?.launchID ?? UUID().uuidString
         launchID = launch
         // A synthetic host shares a pasteboard of its own, never this Mac's clipboard.
-        clipboard = HostClipboard(server: server, enabled: config.shareClipboard, launchID: launch, synthetic: synthetic)
+        clipboard = pipelineParent?.clipboard ?? HostClipboard(server: server, enabled: config.shareClipboard, launchID: launch, synthetic: synthetic)
         let hook = Self.testMenuHook(synthetic: synthetic)
         testMenuPID = hook.pid
         testMenuLine = hook.line
@@ -347,25 +395,58 @@ package final class StreamCoordinator {
         // each post just before it (and a synthetic host posts nothing: the test pattern is not the
         // screen, docs/pointer-visibility-plan.md Q10), the stage its warp home.
         server.pointerWatch = pointer
-        injector.watch = pointer
+        if pipelineParent == nil { injector.watch = pointer }
         injector.dryRun = synthetic
         injector.testLog = synthetic && inputLog.on
         stage.onWarp = { [pointer] in pointer.sillMoved() }
         // The identity's TXT record (its tag, and `p` on a TLS home door) must be in the first
         // registration: set before `server.start()`.
-        remote?.attach(server: server, status: status, macName: macName, requirePairing: config.requirePairing)
+        if pipelineParent == nil { remote?.attach(server: server, status: status, macName: macName, requirePairing: config.requirePairing) }
         catalog.preferMainDisplay = virtualDisplay   // the Desktop source must never capture the virtual display
         stage.onLost = { [weak self] in Task { @MainActor in await self?.stageLost() } }
         status.update { $0.synthetic = synthetic; $0.virtualDisplayOn = config.virtualDisplay }
         // Every change of the snapshot re-publishes the devices' settings state (deduplicated, so
         // the once-a-second stats send nothing). One before `server.start()` reaches nobody, and
         // every device gets a fresh state in `sendCatalog`, so early calls are harmless.
-        status.onChange = { [weak self] in self?.publishSettings() }
+        status.onChange = { [weak self] in
+            self?.publishSettings()
+            (self?.pipelineParent ?? self)?.publishChildStatus()
+        }
+        menus.focusLease = { [weak self] in
+            guard let self, !(self.pipelineParent ?? self).independentCoordinators.isEmpty else { return nil }
+            return self.menuFocusFence.lease()
+        }
         menus.prepare = { [weak self] in await self?.focusForMenus() ?? true }
         menus.currentTarget = { [weak self] in self?.menuTarget() }
         menus.onSubscribersChanged = { [weak self] any in self?.watchFrontmostApp(any) }
         catalog.onPolled = { [weak self] in self?.menusPolled() }
 
+        if pipelineParent == nil {
+            server.onIndependentSession = { [weak self] scoped, connection, route, link, hello in
+                Task { @MainActor in
+                    guard let self else { connection.cancel(); return }
+                    let id = ObjectIdentifier(connection)
+                    // The admission first joined the legacy pipeline. Keep the Mac's device card,
+                    // but remove every piece of legacy pipeline state before its private catalog.
+                    self.connections[id] = nil; self.routes[id] = nil; self.clientFPS[id] = nil
+                    self.lastPublished[id] = nil; self.linkReports[id] = nil
+                    do {
+                        let child = try StreamCoordinator(config: self.target, synthetic: self.synthetic,
+                            appKitLoop: self.appKitLoop, remote: self.remote, testHooks: testHooks,
+                            hostVersion: self.hostVersion, pipelineServer: scoped, pipelineParent: self)
+                        self.independentCoordinators[id] = child
+                        child.useSoftwareEncoder = self.useSoftwareEncoder
+                        child.status.update { $0.softwareEncoder = child.useSoftwareEncoder }
+                        child.catalog.start()
+                        // Wiring precedes activation; the server buffers picks until this point.
+                        scoped.activateScopedSession(connection, route: route, link: link)
+                        if CGPreflightScreenCaptureAccess() { await child.catalog.refreshWindows() }
+                    } catch {
+                        scoped.goodbye(Goodbye(reason: "independentSession", message: "This Mac couldn’t open another Sill stream. Try again.", reconnect: false), to: connection)
+                    }
+                }
+            }
+        }
         server.onClientConnected = { [weak self] connection, route, link in
             Task { @MainActor in
                 guard let self else { return }
@@ -379,7 +460,7 @@ package final class StreamCoordinator {
                 }
                 // A paired key's session, at either door: the pane's "last connected", and over the
                 // cable the iPhone or iPad the key runs on (learned once).
-                if let fp = route.fingerprint, route.pairedName != nil {
+                if !self.isIndependent, let fp = route.fingerprint, route.pairedName != nil {
                     let words = route.label ?? Self.homeRouteWords(route, link: link)
                     self.remote?.sessionStarted(fingerprint: fp, route: words, cableDevice: route.cableDevice)
                 }
@@ -404,11 +485,26 @@ package final class StreamCoordinator {
         server.onClientDisconnected = { [weak self] connection in
             Task { @MainActor in
                 guard let self else { return }
+                let disconnected = ObjectIdentifier(connection)
+                if let child = self.independentCoordinators[disconnected] {
+                    Task { @MainActor [self, child] in
+                        await child.closeIndependentPipeline()
+                        if self.independentCoordinators[disconnected] === child { self.independentCoordinators[disconnected] = nil }
+                        self.publishChildStatus()
+                    }
+                }
+                if self.inputDevice == disconnected {
+                    self.inputCoordinator?.cancelPendingInput()
+                    self.menuFocusFence.advance()
+                    self.injector.releaseAll()
+                    self.inputCoordinator = nil; self.inputDevice = nil
+                }
                 self.clientFPS[ObjectIdentifier(connection)] = nil
                 self.settingsArrivals[ObjectIdentifier(connection)] = nil
                 self.settingsIgnoredLineAt[ObjectIdentifier(connection)] = nil
                 let id = ObjectIdentifier(connection)
                 self.gestureArrivals[id] = nil
+                self.scrollPhases[id] = nil
                 self.routes[id] = nil
                 self.lastPairingWanted[id] = nil
                 self.connections[id] = nil
@@ -541,6 +637,7 @@ package final class StreamCoordinator {
                 self?.menus.clientStats(connection, rttMs: stats.rttMaxMs ?? stats.rttMs)
             }
         }
+        if pipelineParent == nil {
         Stats.shared.onTick = { [weak self] counts in
             let encoded = counts["enc.out"] ?? 0
             Task { @MainActor in self?.status.update { $0.encodedFPS = encoded } }
@@ -548,6 +645,7 @@ package final class StreamCoordinator {
         // A check's frame came back late (on a utility queue): the encoder may not be stuck after all.
         EncoderProbe.onStalledProbeBack = { [weak self] seconds in
             Task { @MainActor in self?.stalledProbeCameBack(after: seconds) }
+        }
         }
     }
 
@@ -577,6 +675,14 @@ package final class StreamCoordinator {
                 $0.network = .registering
             }
         }
+    }
+
+    /// The menu keeps every admitted device card and reports a live child rather than Idle when
+    /// the legacy pipeline has no viewers. Per-session settings continue to use the child's status.
+    private func publishChildStatus() {
+        guard !isIndependent, active == .none else { return }
+        let stream = independentCoordinators.values.compactMap { $0.status.snapshot.stream }.first
+        if status.snapshot.stream != stream { status.update { $0.stream = stream } }
     }
 
     /// Bonjour registered this name (nil: the registration went away, to come back).
@@ -684,10 +790,34 @@ package final class StreamCoordinator {
     package func setTarget(_ requested: HostConfig) -> Bool {
         guard !shuttingDown else { return false }
         var new = requested.validated()
-        if !appKitLoop { new.virtualDisplay = false }
+        if !appKitLoop || isIndependent { new.virtualDisplay = false }
+        if !isIndependent {
+            let previous = target
+            for child in independentCoordinators.values {
+                // Apply the fields the Mac changed, preserving unrelated session-local quality.
+                // In particular, toggling a listener setting must not reset every scene's quality.
+                var inherited = child.target
+                if new.maxFPS != previous.maxFPS { inherited.maxFPS = new.maxFPS }
+                if new.captureScale != previous.captureScale { inherited.captureScale = new.captureScale }
+                if new.bitrate != previous.bitrate { inherited.bitrate = new.bitrate }
+                if new.awayBitrate != previous.awayBitrate { inherited.awayBitrate = new.awayBitrate }
+                if new.awayCaptureScale != previous.awayCaptureScale { inherited.awayCaptureScale = new.awayCaptureScale }
+                if new.prioritizeSpeed != previous.prioritizeSpeed { inherited.prioritizeSpeed = new.prioritizeSpeed }
+                if new.directWireless != previous.directWireless { inherited.directWireless = new.directWireless }
+                if new.remoteAccess != previous.remoteAccess { inherited.remoteAccess = new.remoteAccess }
+                if new.remotePort != previous.remotePort { inherited.remotePort = new.remotePort }
+                if new.internetAccess != previous.internetAccess { inherited.internetAccess = new.internetAccess }
+                if new.requirePairing != previous.requirePairing { inherited.requirePairing = new.requirePairing }
+                if new.shareClipboard != previous.shareClipboard { inherited.shareClipboard = new.shareClipboard }
+                child.setTarget(inherited)
+            }
+        }
         // Share clipboard with devices, at once rather than between pipelines: off must stop what goes
         // out now, not after a restart. The lists say `clipboard` again (or no longer).
-        if clipboard.setEnabled(new.shareClipboard) { broadcastList() }
+        if !isIndependent, clipboard.setEnabled(new.shareClipboard) {
+            broadcastList()
+            for child in independentCoordinators.values { child.broadcastList() }
+        }
         guard new != target else { return false }
         pendingConfig = new
         publishSettings()
@@ -781,7 +911,7 @@ package final class StreamCoordinator {
         if old.directWireless != next.directWireless { server.setPeerToPeer(next.directWireless) }
         // The doors', not the pipeline's: RemoteAccess starts, stops or moves the remote door, and
         // Require pairing changes who the home door admits (and its TXT record).
-        if old.remoteAccess != next.remoteAccess || old.remotePort != next.remotePort || old.internetAccess != next.internetAccess
+        if !isIndependent, old.remoteAccess != next.remoteAccess || old.remotePort != next.remotePort || old.internetAccess != next.internetAccess
             || old.requirePairing != next.requirePairing {
             remote?.apply(next)
         }
@@ -902,9 +1032,28 @@ package final class StreamCoordinator {
         if [.input, .gesture, .windowCommand, .selectSource, .launchApp].contains(message.kind) {
             editableInputRevision = UUID(); editableClick = nil
         }
+        let root = pipelineParent ?? self
+        let device = ObjectIdentifier(connection)
+        if message.kind == .input, !root.independentCoordinators.isEmpty {
+            guard let event = Wire.decode(InputEvent.self, from: message.payload) else { return }
+            let initiates: Bool
+            switch event {
+            case .key(_, let down, _): initiates = down
+            case .pointer(let action, _, _): initiates = action == .leftDown || action == .rightDown || action == .move
+            case .text: initiates = true
+            case .scrollGesture(let phase, _, _): scrollPhases[device] = phase; initiates = phase == .began
+            case .scroll: initiates = scrollPhases[device] == nil  // old clients have unphased wheel deltas
+            }
+            if initiates { root.claimInput(for: self, device: device) }
+            else if root.inputCoordinator !== self || root.inputDevice != device { return }
+        } else if [.gesture, .windowCommand, .selectSource, .launchApp, .pressMenuItem].contains(message.kind)
+                    || (message.kind == .fetchMenu && Wire.decode(FetchMenu.self, from: message.payload)?.id != nil) {
+            root.claimInput(for: self, device: device)
+        }
         switch message.kind {
         case .selectSource:
             guard let source = Wire.decode(StreamSource.self, from: message.payload) else { return }
+            if source != active { menuFocusFence.advance() }
             selectionIntent = UUID(); pendingLaunch = nil
             appRestoreTask?.cancel(); appRestoreTask = nil; appRestoreOwner = nil
             // A window picked comes forward on the Mac, which closes a view a gesture opened; the
@@ -947,8 +1096,7 @@ package final class StreamCoordinator {
                 await restore.value
                 guard selectionIntent == intent, connections[owner] === connection, !app.isTerminated else { return }
                 appRestoreTask = nil; appRestoreOwner = nil
-                app.unhide()
-                app.activate(options: [.activateAllWindows])
+                if ownsInputFocus { app.unhide(); app.activate(options: [.activateAllWindows]) }
                 await catalog.refreshWindows()
                 guard selectionIntent == intent, connections[owner] === connection else { return }
                 if let window = catalog.infos.first(where: { $0.bundleID == req.bundleID }) {
@@ -1065,9 +1213,17 @@ package final class StreamCoordinator {
             settingsArrivals[id] = recent
             // A connection whose route is not known (never: it is set before any message is
             // handled) counts as remote, so nothing it sends can widen exposure.
-            let (ok, refused) = DeviceSettings.accepted(change, virtualDisplayAvailable: appKitLoop,
+            let (accepted, refused) = DeviceSettings.accepted(change, virtualDisplayAvailable: appKitLoop && !isIndependent,
                                                         fromRemote: routes[id].map { $0.isRemote } ?? true)
+            var ok = accepted
             if !refused.isEmpty { print("Settings from \(who) refused: \(refused.joined(separator: ", "))") }
+            if let parent = pipelineParent, let direct = ok.directWireless, !shuttingDown {
+                // This control changes the Mac's actual listener, so it belongs to the root. The
+                // root's normal persistence hook/nearby permission applies; quality stays local.
+                let global = HostSettingsChange(directWireless: direct)
+                parent.setTarget(parent.onDeviceSettingsChange?(global, false) ?? parent.target.applying(global))
+                ok.directWireless = nil
+            }
             if !ok.isEmpty, !shuttingDown {
                 let before = target
                 // A device away from home sets the away quality, never the home one (§5.1).
@@ -1174,7 +1330,7 @@ package final class StreamCoordinator {
     /// it later), is a fit for `fits`: the window goes back to its own frame when it stops streaming
     /// (`restoreFits`, issue #57). None once the host is shutting down: nothing would put it back.
     private func fitToViewport(_ window: SCWindow) -> CGSize? {
-        guard !shuttingDown, let v = viewport, let textScale = v.scale, textScale > 0, v.width > 0, v.height > 0 else { return nil }
+        guard physicalWindows.fitOwners[window.windowID] == pipelineID, !shuttingDown, let v = viewport, let textScale = v.scale, textScale > 0, v.width > 0, v.height > 0 else { return nil }
         let target = CGSize(width: (v.width / textScale).rounded(), height: (v.height / textScale).rounded())
         let current = Self.liveBounds(of: window.windowID)?.size ?? window.frame.size
         if abs(current.width - target.width) <= 2, abs(current.height - target.height) <= 2 { return nil }
@@ -1265,10 +1421,24 @@ package final class StreamCoordinator {
     func select(_ source: StreamSource, bringForward: Bool = false) async {
         editableDown = nil; editableClick = nil; editableInputRevision = UUID()
         guard !switching, !shuttingDown else { return }
+        if case .window(let id) = source {
+            let root = pipelineParent ?? self
+            // A private display is physically owned by the legacy pipeline. It cannot safely be
+            // restored or moved while another pipeline captures its staged rectangle.
+            if isIndependent, root.stage.placement?.windowID == id || root.physicalWindows.staging.values.contains(id) {
+                for connection in connections.values {
+                    server.goodbye(Goodbye(reason: "windowStaged", message: "This window is on Sill’s Virtual Display. Turn Virtual Display off on the Mac before opening it in another Sill window.", reconnect: false), to: connection)
+                }
+                return
+            }
+            physicalWindows.reserve(id, for: pipelineID)
+        }
         switching = true
         if source != active { missingPolls = 0 }    // a window's looks off the list are its own
         restartOf = (source == active && source != .none) ? source : nil
         defer {
+            physicalWindows.staging[pipelineID] = nil
+            physicalWindows.retain(active, for: pipelineID)
             switching = false
             restartOf = nil
             var pick = pickArrivedWhileSwitching
@@ -1410,7 +1580,8 @@ package final class StreamCoordinator {
             listedFullScreen = WindowRestore.coversDisplay(w.frame, WindowSizer.displayFrames()) ? id : nil
             title = Self.menuTitle(for: w)
             var size = w.frame.size
-            if virtualDisplay, stage.disabledReason == nil {
+            if virtualDisplay, stage.disabledReason == nil, !physicalWindows.others(pipelineID).contains(id) {
+                physicalWindows.staging[pipelineID] = id
                 let want = wantedStage(for: w)
                 // A window Sill sized in regular mode (the virtual display turned on while it
                 // streamed): the stage keeps the frame it would have gone back to as its way home.
@@ -1445,7 +1616,7 @@ package final class StreamCoordinator {
                 // picked window). A covered window stops repainting, so it would stream frozen, and
                 // keys go to the active app's key window. Done before capture starts, so the first
                 // frames already show it uncovered. The virtual display's fallback lands here too.
-                if comeForward, !shuttingDown { activateAndRaise(window: w) }
+                if comeForward, !shuttingDown, ownsInputFocus { activateAndRaise(window: w) }
                 // Fit the window to the client's panel before capture starts, so the stream comes up
                 // at the new size instead of restarting once the catalog notices. `w` is a snapshot
                 // with the old frame; the window server has the new one.
@@ -1496,7 +1667,7 @@ package final class StreamCoordinator {
                 print("Capture on the virtual display failed: \(error); retrying with the real window.")
                 status.update { $0.lastStageFailure = "capture on the display failed" }
                 stage.release()
-                if comeForward, !shuttingDown { activateAndRaise(window: w) }   // regular mode now: a pick comes forward
+                if comeForward, !shuttingDown, ownsInputFocus { activateAndRaise(window: w) }   // regular mode now: a pick comes forward
                 let fallback = "\(w.owningApplication?.applicationName ?? "?") — \(w.title ?? "")\(useSoftwareEncoder ? " (software encoder)" : "")"
                 do {
                     try await startPipeline(source: source, filter: SCContentFilter(desktopIndependentWindow: w), sourceRect: nil,
@@ -1591,6 +1762,45 @@ package final class StreamCoordinator {
     private var leftWhileHeld: [KeyStrokes.Device] = []
     /// How long held input waits for the app to become frontmost before it is replayed anyway.
     private static let activationTimeout: TimeInterval = 0.6
+
+    private func claimInput(for coordinator: StreamCoordinator, device: ObjectIdentifier) {
+        guard !independentCoordinators.isEmpty else { return }
+        if inputCoordinator !== coordinator || inputDevice != device {
+            menuFocusFence.advance()
+            inputCoordinator?.cancelPendingInput()
+            injector.releaseAll()
+            coordinator.lastRaiseCheck = 0; coordinator.lastActivationAt = 0
+            inputCoordinator = coordinator; inputDevice = device
+        }
+        injector.watch = coordinator.pointer
+    }
+
+    private var ownsInputFocus: Bool {
+        let root = pipelineParent ?? self
+        return root.inputCoordinator == nil || root.inputCoordinator === self
+    }
+
+    /// The parent keeps a strong reference through this awaited stop. Closing a scene never
+    /// leaves a live capture/encoder, pending input, or a physical-window viewer reservation.
+    private func closeIndependentPipeline() async {
+        shuttingDown = true
+        cancelPendingInput(); appRestoreTask?.cancel(); pendingLaunch = nil
+        stopRecheck(); catalog.clientCount = 0; watchFrontmostApp(false)
+        while switching { try? await Task.sleep(for: .milliseconds(10)) }
+        await capture.stop(); await syntheticCapture.stop()
+        capture.onFrame = nil; syntheticCapture.onFrame = nil; encoder = nil
+        active = .none
+        physicalWindows.staging[pipelineID] = nil
+        physicalWindows.retain(.none, for: pipelineID)
+        restoreFits(keeping: nil)
+    }
+
+    private func cancelPendingInput() {
+        inputRevision = UUID()
+        heldInput.removeAll(); holdUntil = 0; leftWhileHeld.removeAll()
+        editableDown = nil; editableClick = nil; editableInputRevision = UUID()
+        pendingGestures.removeAll(); gestureDrain?.cancel(); gestureDrain = nil
+    }
 
     private func deliver(_ event: InputEvent, in rect: CGRect, from device: KeyStrokes.Device) {
         // Queue while holding, and while anything is still queued, so order is never inverted.
@@ -1762,6 +1972,7 @@ package final class StreamCoordinator {
             }
         }
         holdUntil = now + Self.activationTimeout
+        let revision = inputRevision
         Task { @MainActor in
             // Replay as soon as our window is the one under the click (usually 50–200 ms), or at
             // the timeout. On the virtual display nothing can cover it: wait for activation only.
@@ -1772,6 +1983,7 @@ package final class StreamCoordinator {
                 if active && onTop { break }
                 try? await Task.sleep(for: .milliseconds(20))
             }
+            guard revision == self.inputRevision else { return }
             self.releaseHeldInput()
         }
     }
@@ -1975,6 +2187,7 @@ package final class StreamCoordinator {
     /// already, and a synthetic host's hook is never activated: true at once for both and for
     /// nothing. During a switch (`active` still names the old source) nothing is activated.
     private func focusForMenus() async -> Bool {
+        guard ownsInputFocus else { return false }
         guard case .window(let id) = active else { return true }
         let staged = virtualDisplay && stage.isStaged
         guard let pid = staged ? stage.placement?.pid : catalog.window(id: id)?.owningApplication?.processID else { return false }
@@ -1997,10 +2210,11 @@ package final class StreamCoordinator {
         if frontmost { return true }
         let deadline = CFAbsoluteTimeGetCurrent() + Self.activationTimeout
         while CFAbsoluteTimeGetCurrent() < deadline {
+            guard ownsInputFocus else { return false }
             if Self.activePID(trustAppKit: appKitLoop) == pid { return true }
             try? await Task.sleep(for: .milliseconds(20))
         }
-        return Self.activePID(trustAppKit: appKitLoop) == pid
+        return ownsInputFocus && Self.activePID(trustAppKit: appKitLoop) == pid
     }
 
     /// TEST ONLY: `SILL_TEST_MENU_PID`, honoured only by a --synthetic host (which does not
@@ -2040,6 +2254,11 @@ package final class StreamCoordinator {
     /// window back and dies of the signal with no goodbye (`releaseKeysForExit`): its devices notice
     /// by liveness.
     package func shutdownForExit() {
+        for child in independentCoordinators.values {
+            child.cancelPendingInput(); child.shuttingDown = true
+            child.physicalWindows.retain(.none, for: child.pipelineID)
+        }
+        cancelPendingInput()
         injector.releaseAll()
         server.goodbyeAll(Goodbye(reason: Goodbye.quit), within: 0.1)
         shuttingDown = true
@@ -2052,6 +2271,11 @@ package final class StreamCoordinator {
     /// device goes back to its own frame (a line each, only when a window was sized); nothing else
     /// happens (no goodbye), as before.
     package func releaseKeysForExit() {
+        for child in independentCoordinators.values {
+            child.cancelPendingInput(); child.shuttingDown = true
+            child.physicalWindows.retain(.none, for: child.pipelineID)
+        }
+        cancelPendingInput()
         injector.releaseAll()
         restoreFits(keeping: nil)
     }
@@ -2068,7 +2292,9 @@ package final class StreamCoordinator {
     /// on; none for one gone or already home.
     private func restoreFits(keeping keep: CGWindowID?) {
         var windows = WindowSizer.AXWindows(sizer: sizer)
-        for s in fits.restore(keeping: keep, staged: stage.placement?.windowID, on: &windows) {
+        var kept = physicalWindows.others(pipelineID)
+        if let keep { kept.insert(keep) }
+        for s in fits.restore(keeping: kept, staged: stage.placement?.windowID, on: &windows) {
             if case .restore = s.decision { Stats.shared.bump(s.done ? "win.restored" : "win.restoreFailed") }
             if let line = s.line { print(line) }
         }
@@ -2396,12 +2622,14 @@ package final class StreamCoordinator {
     private func queueGesture(_ gesture: TrackpadGesture, from device: String) {
         pendingGestures.append((gesture, device))
         guard gestureDrain == nil else { return }
+        let revision = inputRevision
         gestureDrain = Task { @MainActor [weak self] in
             guard let self else { return }
             let deadline = CFAbsoluteTimeGetCurrent() + 2
-            while self.switching, CFAbsoluteTimeGetCurrent() < deadline {
+            while self.switching, !Task.isCancelled, CFAbsoluteTimeGetCurrent() < deadline {
                 try? await Task.sleep(for: .milliseconds(20))
             }
+            guard !Task.isCancelled, revision == self.inputRevision else { return }
             while !self.pendingGestures.isEmpty {
                 let next = self.pendingGestures.removeFirst()
                 self.performGesture(next.gesture, from: next.device)
@@ -2499,7 +2727,7 @@ package final class StreamCoordinator {
                       payload: Wire.encode(WindowList(macName: macName, windows: catalog.infos, active: active, launchID: launchID,
                                                       hostVersion: hostVersion, protocol: SillProtocol.current,
                                                       gestures: TrackpadGesture.generation, clipboard: clipboard.advertised,
-                                                      runningApps: catalog.runningApps, editableFocus: synthetic ? nil : EditableFocus.generation)))
+                                                      runningApps: catalog.runningApps, editableFocus: synthetic ? nil : EditableFocus.generation, independentSessions: isIndependent ? 1 : nil)))
     }
 
     private func broadcastList() { server.broadcast(listMessage()) }
@@ -2560,10 +2788,10 @@ package final class StreamCoordinator {
         }
         return HostSettingsState(settings: t.streamSettings(away: thisAway),
                                  persistent: onDeviceSettingsChange != nil,
-                                 virtualDisplayAvailable: appKitLoop,
+                                 virtualDisplayAvailable: appKitLoop && !isIndependent,
                                  virtualDisplayNote: virtualDisplayNote(target: t, snapshot: s),
                                  softwareEncoder: s.softwareEncoder,
-                                 stream: s.stream?.wire,
+                                 stream: active == .none ? nil : s.stream?.wire,
                                  answering: answering,
                                  away: away,
                                  link: link)
@@ -2573,6 +2801,7 @@ package final class StreamCoordinator {
     /// permission lines: permissions are polled, not event-driven, and a missing one still reaches
     /// the device as the fallback reason on the next pick.
     private func virtualDisplayNote(target t: HostConfig, snapshot s: HostStatusSnapshot) -> String? {
+        if isIndependent { return "Independent Sill windows capture the Mac’s real windows. Virtual Display is unavailable in this session." }
         if !appKitLoop { return "Start SillHost with --virtual-display to use it." }
         if s.virtualDisplayAPIMissing, let p = s.virtualDisplayProblem { return "Not available on this version of macOS: \(p)" }
         guard t.virtualDisplay else { return nil }

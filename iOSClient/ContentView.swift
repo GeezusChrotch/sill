@@ -5,7 +5,14 @@ import StreamProtocol
 struct ContentView: View {
     @StateObject private var client = StreamClient()
     #if os(visionOS)
-    @Environment(\.scenePhase) private var scenePhase
+    private let spatialSeed: VisionWindowSeed?
+    private let spatialManualConnect: Bool
+    @State private var spatialStartupPerformed = false
+
+    init(spatialSeed: VisionWindowSeed? = nil, spatialManualConnect: Bool = false) {
+        self.spatialSeed = spatialSeed
+        self.spatialManualConnect = spatialManualConnect
+    }
     #endif
     /// Tells the host what this device sees, once a second while connected. Also covers the DEBUG
     /// harness's `-SillLive 1` session, which runs on this same client.
@@ -14,21 +21,9 @@ struct ContentView: View {
     var body: some View {
         root.onAppear { statsReporter.attach(to: client) }
         #if os(visionOS)
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .background { stopSpatialSession() }
-            }
-            .onDisappear { stopSpatialSession() }
+            .background(VisionWindowGeometry(client: client).frame(width: 1, height: 1).accessibilityHidden(true))
         #endif
     }
-
-    #if os(visionOS)
-    private func stopSpatialSession() {
-        client.cancelPendingLink()
-        client.cancelPairing()
-        client.endOverlayAsk(withdraw: true)
-        client.disconnect()
-    }
-    #endif
 
     @ViewBuilder private var root: some View {
         #if DEBUG
@@ -67,6 +62,23 @@ struct ContentView: View {
         .onAppear {
             #if DEBUG
             SecondWindow.openFromLaunchArgument()   // -SillSecondWindow 1
+            #endif
+            #if os(visionOS)
+            if spatialStartupPerformed {
+                if !client.connected { client.startBrowsing() }
+                return
+            }
+            spatialStartupPerformed = true
+            if spatialManualConnect {
+                client.prepareSpatialWindowForManualConnection()
+                client.startBrowsing()
+                client.status = "Choose a Mac to reconnect this restored Sill window."
+                return
+            }
+            if let spatialSeed {
+                client.startSpatialWindow(seed: spatialSeed)
+                return
+            }
             #endif
             client.startBrowsing()
             client.startRemote()                 // saved Macs without a key are cleared; DEBUG pairing arguments
@@ -1001,7 +1013,7 @@ struct ConnectScreen: View {
 
             #if os(visionOS)
             // The spatial keyboard floats outside this window; moving its field breaks focus aim.
-            let toTop = false
+            let toTop = true
             #else
             let toTop = editing && !layout.topHalf
             #endif
@@ -1096,6 +1108,22 @@ struct ConnectScreen: View {
 
     private func column(_ layout: ConnectLayout) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            #if os(visionOS)
+            HStack(spacing: 14) {
+                Image("SillLogo")
+                    .resizable().scaledToFit()
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .accessibilityHidden(true)
+                Text("Sill")
+                    .font(.largeTitle.weight(.semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            #endif
             // Leading, so the title never jumps sideways when the hint, a row or the card widens the
             // column. Vertically it is still centred (ColumnOverFooter): what adds height moves it up
             // by half as much. It wraps, never truncates, under the home card ("Pair with" and a

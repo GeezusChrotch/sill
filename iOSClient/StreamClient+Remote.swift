@@ -296,7 +296,12 @@ extension StreamClient {
 
     /// Dials a saved Mac at its saved addresses (§7.5). A tap on its Remote row, Connect Remotely
     /// on its network row, the session after a pairing, the automatic reconnect, `-SillDialSaved`.
-    func dialSaved(_ macID: String, why: DialReason) {
+    func dialSaved(_ macID: String, why: DialReason, preservingSpatialSelection: Bool = false) {
+        #if os(visionOS)
+        if (why == .tap || why == .connectRemotely || why == .launchArgument) && !preservingSpatialSelection {
+            clearSpatialPendingSelectionForManualConnect()
+        }
+        #endif
         guard let mac = savedMac(macID), let pin = mac.fingerprintData else { return }
         let name = displayName(macID)
         guard let identity = DeviceIdentity.existing() else {
@@ -813,6 +818,9 @@ extension StreamClient {
     /// Confirmed: to the row the ask reached when it names that key, else the home rows pinned to
     /// its key, then its addresses, as before (StreamClient+Home's `pairLinkAtHome`).
     func confirmPendingLink() {
+        #if os(visionOS)
+        clearSpatialPendingSelectionForManualConnect()
+        #endif
         guard let link = pendingLink else { return }
         pendingLink = nil
         pairLinkAtHome(link, overlay: connected, scanned: false)
@@ -823,6 +831,9 @@ extension StreamClient {
     /// The typed path: the address and the code as typed, checked here first (a typo never uses up
     /// one of the Mac's five tries, and nothing is sent).
     func pairTyped(code codeText: String, address addressText: String, overlay: Bool) {
+        #if os(visionOS)
+        clearSpatialPendingSelectionForManualConnect()
+        #endif
         let address: ParsedAddress
         switch AddressParser.parse(addressText) {
         case .success(let a): address = a
@@ -869,6 +880,9 @@ extension StreamClient {
 
     /// The QR path: the link's addresses one at a time, pinned to its key.
     func pair(link: PairLink, overlay: Bool, scanned: Bool = false) {
+        #if os(visionOS)
+        clearSpatialPendingSelectionForManualConnect()
+        #endif
         let addresses = link.addresses.map(RemoteDialPolicy.address(for:))
         let candidates = RemoteDialPolicy.order(addresses, remotePort: link.port, lastWorked: nil, localIPv4: Self.localIPv4Networks())
         startPairing(candidates: candidates, pin: link.fingerprint, key: { _ in PairingProof.qrKey(secret: link.secret) },
@@ -878,6 +892,9 @@ extension StreamClient {
 
     /// The typed path: one address, any P-256 key, bound into the proof with K from the code.
     func pair(code: String, address: ParsedAddress, overlay: Bool) {
+        #if os(visionOS)
+        clearSpatialPendingSelectionForManualConnect()
+        #endif
         let a = RemoteDialPolicy.address(for: address)
         let port = address.port ?? HostConfigDefaults.remotePort
         let candidates = [RemoteDialPolicy.Candidate(host: a.host, port: port, kind: a.kind, via: a.via)]

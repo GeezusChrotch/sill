@@ -9,8 +9,8 @@ settings:
     SWIFT_VERSION: 5.0
     SWIFT_STRICT_CONCURRENCY: minimal
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: 0.15.0
-    CURRENT_PROJECT_VERSION: 15
+    MARKETING_VERSION: 0.16.0
+    CURRENT_PROJECT_VERSION: 16
 targets:
   SillVision:
     type: application
@@ -37,7 +37,7 @@ targets:
         NSBonjourServices: ["_sill._tcp"]
         ITSAppUsesNonExemptEncryption: false
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+          UIApplicationSupportsMultipleScenes: true
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
