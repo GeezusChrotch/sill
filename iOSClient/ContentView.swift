@@ -138,6 +138,7 @@ struct ContentView: View {
 ///   `-SillDrawerSearch <text>`: the open drawer searches for that text with the keyboard up for its
 ///   field (in a live session the real keyboard), so a photo shows what the keyboard leaves in view.
 /// * `-SillScaleOpen 1` — start with the Aa slider unfolded (as while a finger holds it);
+///   on visionOS, presents the native picker 1.5 s after attachment instead.
 ///   `-SillScale 1.5` sets the scale it opens at.
 /// * `-SillWindowMenu 1` — open the first thumbnail's traffic lights and keep them open.
 /// * `-SillKeyboard 1` — start with the software keyboard shown: in the mock only the Keyboard

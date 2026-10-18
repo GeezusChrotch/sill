@@ -369,6 +369,9 @@ final class StreamClient: ObservableObject {
     /// waits out a closed window stands down if this moved meanwhile: the user chose something,
     /// and the host cannot tell that request from a Desktop tap, so it could replace the choice.
     private var choicesSent = 0
+    /// Explicit drawer/window intent outlives provisional empty lists while the Mac opens,
+    /// restores or switches captures. Automatic Desktop must not cancel that request.
+    private var pendingAppSelection: (windowID: UInt32?, bundleID: String?, expires: Date)?
     @Published var active: StreamSource = .none {
         didSet {
             #if os(visionOS)
@@ -3457,6 +3460,7 @@ final class StreamClient: ObservableObject {
             searchingSince = ProcessInfo.processInfo.systemUptime
             askedNearby = false
         }
+        pendingAppSelection = nil
         lastAutoDesktop = .distantPast     // the next connection starts on the Desktop again
         self.status = status
         macName = ""
@@ -3490,6 +3494,7 @@ final class StreamClient: ObservableObject {
         #if os(visionOS)
         clearSpatialPendingSelectionForManualConnect()
         #endif
+        resumeSource = nil
         noteAction()
         request(source)
     }
@@ -3508,6 +3513,9 @@ final class StreamClient: ObservableObject {
                 size: spatialSnapshot ?? CGSize(width: window.width, height: window.height))
         } else { spatialPreferredSourceSize = nil }
         #endif
+        if case .window(let id) = source {
+            pendingAppSelection = (id, nil, Date().addingTimeInterval(15))
+        } else { pendingAppSelection = nil }
         choicesSent += 1
         send(.selectSource, Wire.encode(source))
         #if DEBUG
@@ -3566,8 +3574,32 @@ final class StreamClient: ObservableObject {
         clearSpatialPendingSelectionForManualConnect()
         #endif
         noteAction()
+        resumeSource = nil
+        let expires = Date().addingTimeInterval(15)
+        pendingAppSelection = (nil, bundleID, expires)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, self.pendingAppSelection?.expires == expires else { return }
+            _ = self.awaitingAppSelection(active: self.active, windows: self.windows)
+        }
         choicesSent += 1   // the host picks the launched app's window: a choice, like a pick
         send(.launchApp, Wire.encode(LaunchApp(bundleID: bundleID)))
+    }
+
+    /// Called for each host list, before automatic Desktop recovery. A stale Desktop list
+    /// cannot acknowledge an app pick; only its matching active window can do that.
+    private func awaitingAppSelection(active: StreamSource, windows: [WindowInfo]) -> Bool {
+        guard let pending = pendingAppSelection else { return false }
+        if case .window(let id) = active,
+           pending.windowID == id || windows.contains(where: { $0.id == id && $0.bundleID == pending.bundleID }) {
+            pendingAppSelection = nil
+            return false
+        }
+        guard Date() < pending.expires else {
+            pendingAppSelection = nil
+            status = "The app hasn’t opened a window yet. Try Apps again."
+            return false
+        }
+        return true
     }
 
     /// Send one input event to the Mac. Safe to call from the main thread; the work hops to the
@@ -4153,6 +4185,7 @@ final class StreamClient: ObservableObject {
                 #if os(visionOS)
                 if self.suppressSpatialAutoDesktop { return }
                 #endif
+                if self.awaitingAppSelection(active: list.active, windows: list.windows) { return }
                 if list.active == .none, !Self.noAutoDesktop {
                     let watched: DiscoveryPolicy.Watched
                     switch previous {

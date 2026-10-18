@@ -7,8 +7,8 @@ final class Connection {}
     var infos: [WindowInfo] = []
     var afterRefresh: [WindowInfo]?
     var refreshes = 0
-    var onRefresh: (() -> Void)?
-    func refreshWindows() async { refreshes += 1; if let afterRefresh { infos = afterRefresh }; onRefresh?() }
+    var onRefresh: (() async -> Void)?
+    func refreshWindows() async { refreshes += 1; if let afterRefresh { infos = afterRefresh }; await onRefresh?() }
 }
 enum WindowCatalog { static let ownPID: Int32 = 123 }
 @MainActor final class NSRunningApplication {
@@ -42,6 +42,8 @@ struct Chords { func forget() {} }
     let catalog = Catalog()
     let gestureChords = Chords()
     var ownsInputFocus = true, switching = false, shuttingDown = false
+    var restartOf: StreamSource?
+    var pickArrivedWhileSwitching: (source: StreamSource, intent: UUID, owner: ObjectIdentifier?)?
     var picks: [StreamSource] = []
     func select(_ source: StreamSource, bringForward: Bool = false) async {
         precondition(!switching, "pending launch must wait until capture switching completes")
@@ -52,6 +54,7 @@ struct Chords { func forget() {} }
         /* LAUNCH */
     }
     /* RESOLVER */
+    /* PICKS */
     func admit() -> Connection { let connection = Connection(); connections[ObjectIdentifier(connection)] = connection; return connection }
     func choose(_ source: StreamSource) { selectionIntent = UUID(); pendingLaunch = nil; picks.append(source) }
 }
@@ -84,7 +87,9 @@ struct Chords { func forget() {} }
         expect(running.activations == 1 && running.unhides == 1, "explicit minimized selection activates its app")
         let minimizedBusy = Coordinator(), minimizedBusyConnection = minimizedBusy.admit()
         minimizedBusy.catalog.afterRefresh = [a]; minimizedBusy.switching = true
+        let opensBeforeBusy = NSWorkspace.shared.opens
         await minimizedBusy.launch(LaunchApp(bundleID: editor), connection: minimizedBusyConnection)
+        expect(NSWorkspace.shared.opens == opensBeforeBusy, "matching restored window during capture switch never reopens app")
         expect(minimizedBusy.picks.isEmpty && minimizedBusy.pendingLaunch != nil, "restored minimized window waits for capture switch")
         minimizedBusy.switching = false
         expect(await minimizedBusy.selectPendingAppWindow() && minimizedBusy.picks == [.window(1)], "restored minimized window selects when capture settles")
@@ -95,7 +100,42 @@ struct Chords { func forget() {} }
         expect(superseded.picks == [.window(2)] && superseded.pendingLaunch == nil, "new user pick during restore refresh supersedes app selection")
         let windowless = Coordinator(), windowlessConnection = windowless.admit()
         await windowless.launch(LaunchApp(bundleID: editor), connection: windowlessConnection)
-        expect(windowless.picks == [.desktop] && windowless.pendingLaunch == nil, "windowless app exposes its Desktop menus without future selection theft")
+        expect(windowless.picks.isEmpty && windowless.pendingLaunch != nil, "running app remains pending through an empty restore refresh")
+        expect(NSWorkspace.shared.opens == 1, "windowless running app receives a reopen event")
+        windowless.catalog.infos = [b]
+        expect(await windowless.selectPendingAppWindow() == false, "another app cannot fulfill delayed restoration")
+        windowless.catalog.infos = [a]
+        expect(await windowless.selectPendingAppWindow() && windowless.picks == [.window(1)], "delayed restored, unhidden or fullscreen app window is eventually selected")
+        let reopened = Coordinator(), reopenedConnection = reopened.admit()
+        reopened.catalog.afterRefresh = [a]
+        reopened.catalog.onRefresh = { _ = await reopened.selectPendingAppWindow() }
+        let opensBeforeCallback = NSWorkspace.shared.opens
+        await reopened.launch(LaunchApp(bundleID: editor), connection: reopenedConnection)
+        expect(NSWorkspace.shared.opens == opensBeforeCallback, "refresh callback that consumed pending intent cannot trigger an extra reopen")
+        expect(reopened.picks == [.window(1)] && reopened.pendingLaunch == nil, "catalog callback and direct refresh consume the same intent only once")
+
+        let closing = Coordinator(), closingConnection = closing.admit()
+        closing.catalog.onRefresh = { closing.shuttingDown = true }
+        let opensBeforeClose = NSWorkspace.shared.opens
+        await closing.launch(LaunchApp(bundleID: editor), connection: closingConnection)
+        expect(closing.picks.isEmpty && NSWorkspace.shared.opens == opensBeforeClose, "shutdown during refresh prevents selection and reopen")
+        let queued = Coordinator(), queuedConnection = queued.admit()
+        queued.switching = true
+        await queued.handlePick(.window(1), owner: ObjectIdentifier(queuedConnection))
+        expect(queued.pickArrivedWhileSwitching?.source == .window(1), "cataloged Apps row survives a switch to a different source")
+        let oldPick = queued.pickArrivedWhileSwitching!
+        queued.switching = false
+        await queued.applyQueuedPick(oldPick)
+        expect(queued.picks == [.window(1)], "queued explicit window is replayed after switching")
+        queued.selectionIntent = UUID()
+        await queued.applyQueuedPick(oldPick)
+        expect(queued.picks.count == 1, "newer launch or pick invalidates already scheduled queue replay")
+        let disconnect = Coordinator(), disconnectedConnection = disconnect.admit()
+        disconnect.switching = true
+        await disconnect.handlePick(.window(1), owner: ObjectIdentifier(disconnectedConnection))
+        disconnect.switching = false; disconnect.connections = [:]
+        await disconnect.applyQueuedPick(disconnect.pickArrivedWhileSwitching!)
+        expect(disconnect.picks.isEmpty, "disconnected scene cannot replay its queued selection")
 
         NSRunningApplication.apps = [:]
         let fresh = Coordinator(), freshConnection = fresh.admit()

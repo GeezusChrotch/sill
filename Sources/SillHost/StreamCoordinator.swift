@@ -209,11 +209,10 @@ package final class StreamCoordinator {
     /// the encoder fallback, a lost display): the source being restarted. Nil during a switch to
     /// another source.
     private var restartOf: StreamSource?
-    /// A device's pick of a different source that came in during that restart (`handlePick`);
-    /// taken by select's defer. Never set during a switch to another source: the device's automatic
-    /// Desktop request can land then (StreamClient's window list handling) and must not override
-    /// the user's pick.
-    private var pickArrivedWhileSwitching: StreamSource?
+    /// The latest explicit window pick during any capture switch, or a Desktop request during
+    /// a restart. The deferred replay keeps its intent and scene owner so a newer choice or
+    /// disconnect wins before the replay task gets its turn.
+    private var pickArrivedWhileSwitching: (source: StreamSource, intent: UUID, owner: ObjectIdentifier?)?
     /// The client's last stream panel size and text scale. One stream, so with several clients
     /// the last one to report wins.
     private var viewport: Viewport?
@@ -1072,7 +1071,7 @@ package final class StreamCoordinator {
             if case .window = source { gestureChords.forget() }
             // A pick from the device's switcher: the device never selects a window by itself (its
             // automatic requests are for the Desktop only).
-            await handlePick(source)
+            await handlePick(source, owner: ObjectIdentifier(connection))
         case .windowCommand:
             // The bar's long-press menu: the window's own traffic lights, pressed through
             // Accessibility. The staged window's element is already matched; others are looked up.
@@ -1094,40 +1093,43 @@ package final class StreamCoordinator {
             selectionIntent = UUID(); pendingLaunch = nil
             appRestoreTask?.cancel(); appRestoreTask = nil; appRestoreOwner = nil
             let intent = selectionIntent, owner = ObjectIdentifier(connection)
+            let expires = Date().addingTimeInterval(10)
             gestureChords.forget()              // the app comes forward, which closes a view a gesture opened
             // All Apps also contains running apps. Their existing window list may not change
             // after openApplication, so choose it now rather than waiting for a catalog change.
             if catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
-                pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
+                pendingLaunch = (req.bundleID, intent, owner, expires)
                 _ = await selectPendingAppWindow()
                 return
             }
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: req.bundleID).first(where: {
                 $0.activationPolicy == .regular && !$0.isTerminated && $0.processIdentifier != WindowCatalog.ownPID
             }), !catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
-                // Explicit drawer activation only: never leave a pending launch that could steal a
-                // later selection. Restore one minimized window off the main actor, bounded.
-                pendingLaunch = nil
+                // Explicit activation only. AX restoration and ScreenCaptureKit's catalog do
+                // not settle together; keep the same bounded, owned intent as a fresh launch.
                 let pid = app.processIdentifier
                 let restore = Task.detached(priority: .userInitiated) { Self.restoreMinimizedWindow(pid: pid) }
                 appRestoreTask = restore; appRestoreOwner = owner
                 await restore.value
-                guard selectionIntent == intent, connections[owner] === connection, !app.isTerminated else { return }
+                guard !shuttingDown, selectionIntent == intent, connections[owner] === connection, !app.isTerminated else { return }
                 appRestoreTask = nil; appRestoreOwner = nil
                 if ownsInputFocus { app.unhide(); app.activate(options: [.activateAllWindows]) }
+                pendingLaunch = (req.bundleID, intent, owner, expires)
                 await catalog.refreshWindows()
-                guard selectionIntent == intent, connections[owner] === connection else { return }
+                guard !shuttingDown, selectionIntent == intent, connections[owner] === connection else { return }
+                // refreshWindows can publish a callback that already consumes this intent.
+                guard pendingLaunch?.intent == intent else { return }
                 if catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
-                    pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
                     _ = await selectPendingAppWindow()
-                } else {
-                    // A windowless app still comes forward, with its menu visible on Desktop.
-                    await select(.desktop)
+                    return
                 }
-                return
+                // A genuinely windowless running app needs the normal reopen event to create
+                // a document/browser window. Continue through openApplication below. A delayed
+                // restored/full-screen window can still satisfy this exact request on later polls.
             }
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: req.bundleID) else { return }
-            pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
+            guard Date() < expires,
+                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: req.bundleID) else { return }
+            pendingLaunch = (req.bundleID, intent, owner, expires)
             let config = NSWorkspace.OpenConfiguration()
             // The launch itself takes no focus on the Mac. Its first window is then picked for the
             // device (`windowsChanged`), which in regular mode brings it forward like any pick.
@@ -1421,12 +1423,24 @@ package final class StreamCoordinator {
     /// user has picked since the watched window closed (StreamClient's window list); an older
     /// device, or a pick made before the device heard of the close, can still let it land during
     /// a restart that follows the user's pick, and then it is queued like the user's own.
-    private func handlePick(_ source: StreamSource) async {
+    private func handlePick(_ source: StreamSource, owner: ObjectIdentifier? = nil) async {
         if switching {
-            if let r = restartOf, source != r { pickArrivedWhileSwitching = source }
+            // Window requests are explicit even during a switch to a different source. Desktop
+            // can be automatic, so retain its existing rule of queuing only behind a restart.
+            if case .window = source {
+                pickArrivedWhileSwitching = (source, selectionIntent, owner)
+            } else if let r = restartOf, source != r {
+                pickArrivedWhileSwitching = (source, selectionIntent, owner)
+            }
             return
         }
         await select(source, bringForward: true)
+    }
+
+    private func applyQueuedPick(_ pick: (source: StreamSource, intent: UUID, owner: ObjectIdentifier?)) async {
+        guard pick.intent == selectionIntent, !shuttingDown,
+              pick.owner.map({ connections[$0] != nil }) ?? true else { return }
+        await handlePick(pick.source, owner: pick.owner)
     }
 
     /// Streams `source` in place of whatever streams now. Also how the host restarts the current
@@ -1473,14 +1487,14 @@ package final class StreamCoordinator {
                 }
             }
             if catalog.clientCount == 0 { pick = nil }
-            if let pick, pick != active {
+            if let pick, pick.source != active {
                 // The pick's own select fits the latest viewport. Run after it has started, the
                 // viewport tail would resize the old window, which `active` still names mid-switch.
                 viewportArrivedWhileSwitching = false
                 // Through the handler's rule again, not straight to `select`: another restart can
                 // start before this Task runs (a viewport's new rate, an encoder hang, a lost
                 // display), and `select` would drop the pick; the rule queues it behind that one.
-                Task { @MainActor in await self.handlePick(pick) }
+                Task { @MainActor in await self.applyQueuedPick(pick) }
             } else if viewportArrivedWhileSwitching {
                 viewportArrivedWhileSwitching = false
                 Task { @MainActor in await self.applyViewportToActiveWindow() }

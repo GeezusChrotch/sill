@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A narrow sidebar uses a native popover so all text-size detents stay visible and selectable.
+/// Both spatial toolbar positions use a native popover with persistent, selectable text-size detents.
 struct VisionTextSizePicker: View {
     @Binding var scale: Double?
     @Environment(\.dismiss) private var dismiss

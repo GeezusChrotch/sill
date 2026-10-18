@@ -8,7 +8,7 @@ final class DispatchWorkItem {
 }
 enum Scheduler { static var pending: [DispatchWorkItem] = [] }
 enum StreamSource: Equatable { case window(UInt32), desktop }
-struct WindowInfo { let id: UInt32 }
+struct WindowInfo { let id: UInt32; var bundleID = "test.editor" }
 struct WindowList { let windows: [WindowInfo] }
 struct LaunchApp { let bundleID: String }
 enum Wire { static func encode(_ app: LaunchApp) -> LaunchApp { app } }
@@ -16,6 +16,10 @@ enum MessageKind { case launchApp }
 final class Connection { enum State { case ready, cancelled }; var state = State.ready }
 final class Client {
     var connection: Connection? = Connection()
+    var active: StreamSource = .desktop
+    var windows: [WindowInfo] = []
+    var resumeSource: StreamSource?
+    var pendingAppSelection: (windowID: UInt32?, bundleID: String?, expires: Date)?
     var pendingSpatialSource: StreamSource?
     var pendingSpatialSourceSize: CGSize?
     var pendingSpatialSourceTimeout: DispatchWorkItem?

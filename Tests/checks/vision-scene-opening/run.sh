@@ -15,6 +15,8 @@ clear = block(client, '    private func cancelSpatialSourceTimeout()', '    /// 
 select = block(client, '    func select(_ source: StreamSource)', '    /// Asks the host to stream this source:')
 select = select.replace('        #if os(visionOS)\n', '').replace('        #endif\n', '')
 launch = block(client, '    func launch(bundleID: String)', '    /// Send one input event').replace('        #if os(visionOS)\n', '').replace('        #endif\n', '')
+# Route the app-selection deadline through the same deterministic scheduler as scene seeds.
+launch = launch.replace('DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in', 'Scheduler.pending.append(DispatchWorkItem { [weak self] in').replace('        }\n        choicesSent += 1', '        })\n        choicesSent += 1')
 bootstrap = block(host, '                        child.catalog.start()', '                    } catch {')
 broadcast = block(host, '    private var spatialCatalogReady = false', '    private func sendCatalog(').replace('    private ', '    ')
 send_guard = block(host, '    private func sendCatalog(to connection:', '        let now').replace('    private ', '    ').replace('NWConnection', 'Connection') + '        server.broadcast(listMessage())\n    }\n'

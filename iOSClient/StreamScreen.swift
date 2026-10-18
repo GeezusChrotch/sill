@@ -105,7 +105,6 @@ struct StreamScreen: View {
     #if os(visionOS)
     @SceneStorage("Sill.spatialToolbarPosition") private var spatialToolbarPosition = "top"
     @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
-    @State private var spatialTextSizeOpen = false
     @State private var spatialToolbarPresented = false
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
@@ -209,7 +208,13 @@ struct StreamScreen: View {
         self.client = client
         _drawerOpen = State(initialValue: drawerOpen)
         _keyboardShown = State(initialValue: keyboardShown)
+        #if os(visionOS)
+        // Native popovers need a presented host. The launch-argument harness opens this after
+        // attachment and toolbar-position restoration, through the same binding as the button.
+        _scaleOpen = State(initialValue: false)
+        #else
         _scaleOpen = State(initialValue: scaleOpen)
+        #endif
         _textScale = State(initialValue: textScale)
         _settingsOpen = State(initialValue: settingsOpen)
         // The panel open over the keyboard, as in a session: it took the keyboard down, and closing
@@ -335,7 +340,7 @@ struct StreamScreen: View {
             #if os(visionOS)
             .environment(\.visionToolbarPosition, $spatialToolbarPosition)
             .environment(\.visionToolbarAutomatic, $spatialToolbarAutomatic)
-            .onChange(of: spatialToolbarPosition) { _, _ in closeWindowMenu(); scaleOpen = false; spatialTextSizeOpen = false }
+            .onChange(of: spatialToolbarPosition) { _, _ in closeWindowMenu(); scaleOpen = false }
             .onChange(of: client.active) { _, _ in spatialToolbarScrollActive = false }
             .onChange(of: client.connectedAt) { _, _ in spatialToolbarScrollActive = false }
             .onChange(of: scenePhase) { _, _ in spatialToolbarScrollActive = false }
@@ -639,6 +644,19 @@ struct StreamScreen: View {
                       + (largerPictureHeld != nil ? "; the Settings panel is open, so it applies when the panel closes" : ""))
             }
         }
+        #if os(visionOS)
+        let opensTextSizeAfterAttachment = true
+        #else
+        let opensTextSizeAfterAttachment = live
+        #endif
+        if defaults.bool(forKey: "SillScaleOpen"), opensTextSizeAfterAttachment {
+            after(1.5) {
+                let scale = defaults.double(forKey: "SillScale")
+                if scale > 0 { textScale = scale }
+                print("harness: the text-size control opened")
+                scaleOpen = true
+            }
+        }
         guard live else { return }
         if defaults.bool(forKey: "SillDrawer") {
             after(1.5) { print("harness: the drawer opened"); withAnimation(.easeOut(duration: 0.18)) { drawerOpen = true } }
@@ -649,14 +667,6 @@ struct StreamScreen: View {
             // waiting under it, then showing: docs/clipboard-plan.md).
             let closeAt = defaults.double(forKey: "SillSettingsCloseAt")
             if closeAt > 1.5 { after(closeAt) { print("harness: the Settings panel closed"); setSettings(false) } }
-        }
-        if defaults.bool(forKey: "SillScaleOpen") {
-            after(1.5) {
-                let scale = defaults.double(forKey: "SillScale")
-                if scale > 0 { textScale = scale }
-                print("harness: the Aa ruler opened")
-                scaleOpen = true
-            }
         }
     }
     private static var launchArgumentsRan = false
@@ -1211,11 +1221,11 @@ struct StreamScreen: View {
                setSettings: { setSettings($0, restoreKeyboard: $1) },
                menusOpened: menusOpened, menusClosed: menusClosed,
                keyboardTools: $keyboardToolsOpen, showKeyboard: { showSpatialKeyboard() }, overlay: overlay,
-               vertical: sidebar, textSizeTools: $spatialTextSizeOpen, thumbnailHeight: thumbnailHeight)
+               vertical: sidebar, thumbnailHeight: thumbnailHeight)
     }
 
     private var spatialToolbarPinned: Bool {
-        settingsOpen || drawerOpen || menusOpen || scaleOpen || spatialTextSizeOpen || keyboardToolsOpen || windowMenu != nil || tour != nil || spatialVoiceOver
+        settingsOpen || drawerOpen || menusOpen || scaleOpen || keyboardToolsOpen || windowMenu != nil || tour != nil || spatialVoiceOver
     }
 
     private func spatialVisibilityButton(sidebar: Bool) -> some View {
@@ -1529,7 +1539,6 @@ private struct TopBar: View {
     let showKeyboard: () -> Void
     let overlay: InputOverlayProxy
     var vertical = false
-    var textSizeTools: Binding<Bool> = .constant(false)
     var thumbnailHeight: CGFloat = 200
     #if os(visionOS)
     @Environment(\.scenePhase) private var scenePhase
@@ -1573,20 +1582,14 @@ private struct TopBar: View {
             // bigger number means a smaller Mac window and bigger text here. The slider unfolds to
             // the right, over the two buttons after it, which fade while it is open.
             #if os(visionOS)
-            if vertical {
-                button(open: textSizeTools.wrappedValue, symbol: "textformat.size", label: "Text size",
-                       accessibilityLabel: "Text size in this window") { textSizeTools.wrappedValue.toggle() }
-                    .popover(isPresented: textSizeTools) {
-                        VisionTextSizePicker(scale: $textScale)
-                    }
-                    .tourTarget(.textSize)
-            } else {
-            TextScaleControl(scale: $textScale, open: $scaleOpen,
-                             width: metrics.buttonWidth, height: metrics.buttonHeight,
-                             pointsPerStep: metrics.buttonHeight >= 60 ? 44 : 40)
+            // A gaze-and-pinch activation must leave the picker open after release. The iPad's
+            // press-and-drag ruler closes on gesture end and also competes with the top scroll view.
+            button(open: scaleOpen, symbol: "textformat.size", label: "Text size",
+                   accessibilityLabel: "Text size in this window") { scaleOpen.toggle() }
+                .popover(isPresented: $scaleOpen, arrowEdge: vertical ? .trailing : .top) {
+                    VisionTextSizePicker(scale: $textScale)
+                }
                 .tourTarget(.textSize)
-
-            }
             #else
             TextScaleControl(scale: $textScale, open: $scaleOpen,
                              width: metrics.buttonWidth, height: metrics.buttonHeight,
