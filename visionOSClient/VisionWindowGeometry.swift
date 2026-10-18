@@ -7,7 +7,6 @@ import StreamProtocol
 struct VisionWindowGeometry: UIViewRepresentable {
     @ObservedObject var client: StreamClient
     @SceneStorage("Sill.spatialToolbarPosition") private var toolbarPosition = "top"
-    @SceneStorage("Sill.spatialToolbarHidden") private var toolbarHidden = false
 
     func makeUIView(context: Context) -> VisionWindowGeometryView {
         VisionWindowGeometryView()
@@ -18,7 +17,7 @@ struct VisionWindowGeometry: UIViewRepresentable {
         // Exact-size mock/live harness frames are visual test fixtures, not scene-size requests.
         if LayoutHarness.Spec.fromLaunchArguments != nil { return }
         #endif
-        let toolbar: VisionWindowSizePolicy.Toolbar = toolbarHidden ? .hidden : toolbarPosition == "left" ? .left : .top
+        let toolbar: VisionWindowSizePolicy.Toolbar = toolbarPosition == "left" ? .left : .top
         view.update(client: client, toolbar: toolbar)
     }
 

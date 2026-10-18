@@ -245,6 +245,8 @@ final class StreamClient: ObservableObject {
     private var requiresSpatialCapability = false
     private var pendingSpatialSource: StreamSource?
     private var pendingSpatialSourceSize: CGSize?
+    private var pendingSpatialSourceTimeout: DispatchWorkItem?
+    private var pendingSpatialSourceTimeoutID: UUID?
     private var spatialSeedStarted = false
     private var suppressSpatialAutoDesktop = false
 
@@ -275,6 +277,7 @@ final class StreamClient: ObservableObject {
     func startSpatialWindow(seed: VisionWindowSeed) {
         guard !spatialSeedStarted else { return }
         spatialSeedStarted = true
+        clearSpatialPendingSelectionForManualConnect()
         requiresSpatialCapability = true
         pendingSpatialSource = seed.source
         pendingSpatialSourceSize = seed.sourceSize
@@ -300,7 +303,14 @@ final class StreamClient: ObservableObject {
         clearSpatialPendingSelectionForManualConnect()
     }
 
+    private func cancelSpatialSourceTimeout() {
+        pendingSpatialSourceTimeout?.cancel()
+        pendingSpatialSourceTimeout = nil
+        pendingSpatialSourceTimeoutID = nil
+    }
+
     func clearSpatialPendingSelectionForManualConnect() {
+        cancelSpatialSourceTimeout()
         pendingSpatialSource = nil
         pendingSpatialSourceSize = nil
         spatialPreferredSourceSize = nil
@@ -3325,8 +3335,7 @@ final class StreamClient: ObservableObject {
     /// The user chose to leave. No reconnect.
     func disconnect() {
         #if os(visionOS)
-        pendingSpatialSource = nil
-        pendingSpatialSourceSize = nil
+        clearSpatialPendingSelectionForManualConnect()
         #endif
         reconnect = nil
         cancelRemoteDial()
@@ -3415,6 +3424,7 @@ final class StreamClient: ObservableObject {
         hostProtocol = nil
         hostGestures = nil
         #if os(visionOS)
+        cancelSpatialSourceTimeout()
         supportsSpatialWindows = false
         spatialPreferredSourceSize = nil
         hostEditableFocus = nil
@@ -3477,6 +3487,9 @@ final class StreamClient: ObservableObject {
     /// The person's pick (a thumbnail, Desktop, the Apps list): the host streams this source and
     /// answers with a fresh window list. It counts for the tour as something happening.
     func select(_ source: StreamSource) {
+        #if os(visionOS)
+        clearSpatialPendingSelectionForManualConnect()
+        #endif
         noteAction()
         request(source)
     }
@@ -3550,6 +3563,7 @@ final class StreamClient: ObservableObject {
     func launch(bundleID: String) {
         #if os(visionOS)
         guard !requiresSpatialCapability || supportsSpatialWindows else { return }
+        clearSpatialPendingSelectionForManualConnect()
         #endif
         noteAction()
         choicesSent += 1   // the host picks the launched app's window: a choice, like a pick
@@ -4090,14 +4104,29 @@ final class StreamClient: ObservableObject {
                 }
                 #if os(visionOS)
                 if let source = self.pendingSpatialSource {
+                    if case .window(let id) = source, !list.windows.contains(where: { $0.id == id }) {
+                        // A new independent host pipeline can still be reading its catalog (or
+                        // retrying a timed-out read). Keep the seed until its window arrives.
+                        // Bound this wait, and tie its error to this exact connection and request.
+                        if self.pendingSpatialSourceTimeout == nil {
+                            let timeoutID = UUID()
+                            self.pendingSpatialSourceTimeoutID = timeoutID
+                            let timeout = DispatchWorkItem { [weak self] in
+                                guard let self, self.connection === from,
+                                      self.pendingSpatialSource == source,
+                                      self.pendingSpatialSourceTimeoutID == timeoutID else { return }
+                                self.disconnect()
+                                self.status = "Couldn’t open that Mac window. Reconnect and choose another window."
+                            }
+                            self.pendingSpatialSourceTimeout = timeout
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+                        }
+                        return
+                    }
+                    self.cancelSpatialSourceTimeout()
                     self.pendingSpatialSource = nil
                     let sourceSize = self.pendingSpatialSourceSize
                     self.pendingSpatialSourceSize = nil
-                    if case .window(let id) = source, !list.windows.contains(where: { $0.id == id }) {
-                        self.suppressSpatialAutoDesktop = true
-                        self.status = "That window closed. Choose another window or Desktop."
-                        return
-                    }
                     self.request(source, spatialSnapshot: sourceSize)
                     return
                 }

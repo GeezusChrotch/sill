@@ -419,7 +419,12 @@ package final class StreamCoordinator {
         menus.prepare = { [weak self] in await self?.focusForMenus() ?? true }
         menus.currentTarget = { [weak self] in self?.menuTarget() }
         menus.onSubscribersChanged = { [weak self] any in self?.watchFrontmostApp(any) }
-        catalog.onPolled = { [weak self] in self?.menusPolled() }
+        catalog.onPolled = { [weak self] in
+            self?.menusPolled()
+            // A launched window can appear during a capture restart. Retry the request on an
+            // unchanged poll too; consuming it while select is busy would lose the user's pick.
+            Task { @MainActor in _ = await self?.selectPendingAppWindow() }
+        }
 
         if pipelineParent == nil {
             server.onIndependentSession = { [weak self] scoped, connection, route, link, hello in
@@ -438,9 +443,15 @@ package final class StreamCoordinator {
                         child.useSoftwareEncoder = self.useSoftwareEncoder
                         child.status.update { $0.softwareEncoder = child.useSoftwareEncoder }
                         child.catalog.start()
-                        // Wiring precedes activation; the server buffers picks until this point.
-                        scoped.activateScopedSession(connection, route: route, link: link)
+                        // The child's first list must follow its initial catalog read. In particular,
+                        // refreshRunningApps can publish before the window read finishes; those
+                        // provisional empty lists must not consume a new scene's selected source.
                         if CGPreflightScreenCaptureAccess() { await child.catalog.refreshWindows() }
+                        guard self.independentCoordinators[id] === child, !child.shuttingDown,
+                              connection.state == .ready else { return }
+                        child.spatialCatalogReady = true
+                        // Wiring and the initial read precede activation; the server buffers picks.
+                        scoped.activateScopedSession(connection, route: route, link: link)
                     } catch {
                         scoped.goodbye(Goodbye(reason: "independentSession", message: "This Mac couldn’t open another Sill stream. Try again.", reconnect: false), to: connection)
                     }
@@ -1084,6 +1095,13 @@ package final class StreamCoordinator {
             appRestoreTask?.cancel(); appRestoreTask = nil; appRestoreOwner = nil
             let intent = selectionIntent, owner = ObjectIdentifier(connection)
             gestureChords.forget()              // the app comes forward, which closes a view a gesture opened
+            // All Apps also contains running apps. Their existing window list may not change
+            // after openApplication, so choose it now rather than waiting for a catalog change.
+            if catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
+                pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
+                _ = await selectPendingAppWindow()
+                return
+            }
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: req.bundleID).first(where: {
                 $0.activationPolicy == .regular && !$0.isTerminated && $0.processIdentifier != WindowCatalog.ownPID
             }), !catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
@@ -1099,8 +1117,9 @@ package final class StreamCoordinator {
                 if ownsInputFocus { app.unhide(); app.activate(options: [.activateAllWindows]) }
                 await catalog.refreshWindows()
                 guard selectionIntent == intent, connections[owner] === connection else { return }
-                if let window = catalog.infos.first(where: { $0.bundleID == req.bundleID }) {
-                    await select(.window(window.id), bringForward: true)
+                if catalog.infos.contains(where: { $0.bundleID == req.bundleID }) {
+                    pendingLaunch = (req.bundleID, intent, owner, Date().addingTimeInterval(10))
+                    _ = await selectPendingAppWindow()
                 } else {
                     // A windowless app still comes forward, with its menu visible on Desktop.
                     await select(.desktop)
@@ -2543,18 +2562,24 @@ package final class StreamCoordinator {
         recheckTask?.cancel()   // ends the held-back loop's sleep; its tail starts a new loop while a device is connected
     }
 
+    /// Only the requesting pipeline may consume an explicit launch. Ordinary catalog updates
+    /// cannot choose a source once it is consumed, expired, disconnected or superseded.
+    private func selectPendingAppWindow() async -> Bool {
+        guard let pending = pendingLaunch else { return false }
+        guard !shuttingDown, pending.intent == selectionIntent, pending.expires >= Date(), connections[pending.owner] != nil else {
+            pendingLaunch = nil
+            return false
+        }
+        guard !switching, let window = catalog.infos.first(where: { $0.bundleID == pending.bundleID }) else { return false }
+        pendingLaunch = nil
+        await select(.window(window.id), bringForward: true)
+        return true
+    }
+
     private func windowsChanged(_ infos: [WindowInfo]) async {
         // The pointer's rectangle follows the catalog: the Desktop's display, a window's bounds.
         defer { pointer.setGeometry(pointerGeometry(), fps: fps) }
-        if let pending = pendingLaunch {
-            if pending.intent != selectionIntent || pending.expires < Date() || connections[pending.owner] == nil {
-                pendingLaunch = nil
-            } else if let w = infos.first(where: { $0.bundleID == pending.bundleID }) {
-                pendingLaunch = nil
-                await select(.window(w.id), bringForward: true)
-                return
-            }
-        }
+        if await selectPendingAppWindow() { return }
         if case .window(let id) = active {
             guard let w = infos.first(where: { $0.id == id }) else {
                 // Alive on the virtual display even if the on-screen list dropped it.
@@ -2730,9 +2755,17 @@ package final class StreamCoordinator {
                                                       runningApps: catalog.runningApps, editableFocus: synthetic ? nil : EditableFocus.generation, independentSessions: isIndependent ? 1 : nil)))
     }
 
-    private func broadcastList() { server.broadcast(listMessage()) }
+    /// A scoped server already owns its admitted client while its catalog initializes.
+    /// Running-app callbacks during that read must not send a provisional empty window list.
+    private var spatialCatalogReady = false
+
+    private func broadcastList() {
+        guard !isIndependent || spatialCatalogReady else { return }
+        server.broadcast(listMessage())
+    }
 
     private func sendCatalog(to connection: NWConnection) {
+        guard !isIndependent || spatialCatalogReady else { return }
         let now = Date().timeIntervalSince1970
         print("Catalog → \(connection.endpoint): \(catalog.infos.count) windows, \(catalog.allIcons.count) icons, \(catalog.installedApps.count) apps")
         server.send(listMessage(), to: connection)

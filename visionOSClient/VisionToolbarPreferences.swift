@@ -27,10 +27,11 @@ extension EnvironmentValues {
 struct VisionToolbarReveal: ViewModifier {
     let automatic: Bool
     let reduceMotion: Bool
+    let group: HoverEffectGroup
 
     func body(content: Content) -> some View {
-        content.hoverEffect { effect, active, proxy in
-            effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.45 : 0.15)) {
+        content.hoverEffect(in: group) { effect, active, proxy in
+            effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
                 $0.clipShape(VisionToolbarRevealShape(size: !automatic || active ? proxy.size : .zero))
             }
         }
@@ -46,5 +47,21 @@ private struct VisionToolbarRevealShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         Path(CGRect(x: rect.maxX - size.width, y: rect.minY, width: size.width, height: size.height))
+    }
+}
+
+/// On visionOS 26+, looking back at the picture preserves an already revealed
+/// group but cannot reveal an inactive group. Real remote input changes the
+/// scene-local group identity to begin a fresh, inactive phase.
+struct VisionToolbarPreserve: ViewModifier {
+    let group: HoverEffectGroup
+    func body(content: Content) -> some View {
+        if #available(visionOS 26.0, *) {
+            content
+                .contentShape(Rectangle())
+                .hoverEffect(in: group.behavior(.preservesGroup)) { effect, _, _ in effect }
+        } else {
+            content
+        }
     }
 }

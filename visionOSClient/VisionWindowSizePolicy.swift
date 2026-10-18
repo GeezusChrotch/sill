@@ -15,8 +15,8 @@ enum VisionWindowSizePolicy {
               source.width > 0, source.height > 0 else { return nil }
         let chrome: CGSize
         switch toolbar {
-        case .top: chrome = CGSize(width: 16, height: 126)
-        case .left: chrome = CGSize(width: 172, height: 16)
+        case .top: chrome = CGSize(width: 16, height: 194)
+        case .left: chrome = CGSize(width: 16, height: 16) // Leading ornament lives outside the scene.
         case .hidden: chrome = CGSize(width: 16, height: 16)
         }
         let available = CGSize(width: maximum.width - chrome.width, height: maximum.height - chrome.height)

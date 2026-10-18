@@ -128,7 +128,7 @@ with both released and updated hosts. No exhaustive matrix of these combinations
 has been completed, and no public visionOS release is claimed here.
 
 
-### Spatial windows and toolbar (0.16 candidate)
+### Spatial windows and toolbar (0.17 candidate)
 
 Each “Open as own window” scene owns the full Sill interface and a separate client. A scene value
 contains only a random UUID; its paired-host seed remains in memory for at most 60 seconds. A
@@ -136,12 +136,37 @@ restored auxiliary scene without that seed shows discovery and requires a manual
 Only the owning UIKit scene's disconnect notification stops its client. Ordinary SwiftUI
 appear/disappear and a sibling taking focus do not disconnect another stream.
 
-Toolbar position, automatic reveal, and manual visibility are saved per scene. Settings offers
-Top / Left side and Show toolbar when looking. The always-visible tab pins the toolbar; its menu
-also offers explicit Hide. With automatic reveal enabled, the system hover compositor clips the
-content and glass while keeping the stream viewport stable. No gaze state enters app code.
-VoiceOver and open toolbar interactions keep the toolbar visible. Sidebar text size uses a native
-popover so the horizontal ruler cannot be clipped by the narrow sidebar.
+A new host pipeline finishes its first catalog read before publishing its window list. The client
+retains the selected source through early empty catalogs for up to ten seconds, then shows a
+connection error if the window remains unavailable. A later explicit app/window choice cancels
+that pending selection. Choosing an app with an existing window selects it immediately, including
+when its catalog is unchanged; selections made during a stream switch wait for it to finish.
+
+Toolbar position and Always show toolbar are saved per scene. The centered frosted pill has
+no visible symbol or text; gaze reveals its toolbar, and tapping it provides an accessible
+explicit reveal that lasts until remote control. Always show is available only in Settings.
+The old manually-hidden preference is no longer read, so a restored scene always retains its
+glance target. Toolbar/stream geometry stays fixed as the compositor reveals or hides controls.
+
+On visionOS 26+, a scene-local `HoverEffectGroup` activates from the toolbar/pill. An explicit
+no-op hover effect on the content surface and surrounding layout uses `preservesGroup`: looking
+back at the picture keeps an already revealed group active without revealing an inactive one.
+An accepted remote click, key, text insertion or scroll starts a control episode and changes
+that scene's group identity, allowing the toolbar to collapse. Pointer hover/movement and
+source selection do not dismiss it. Gaze state never enters app code. Looking outside this
+app can end the group after a one-second exit delay; open tools and VoiceOver keep it visible.
+On visionOS 2–25, the persistence API is unavailable: gaze reveal has the one-second exit grace,
+and tapping the pill still keeps it visible until remote control. These are supported-system
+behaviors awaiting real-headset acceptance, not a claim of tracked gaze or infinite persistence.
+
+The left toolbar is a native leading ornament, so its controls remain interactive outside the
+streamed window boundary. Its height equals the horizontal toolbar's offered width; the preview
+strip receives the space remaining after fixed controls. Its window actions use a native popover
+inside the ornament rather than an in-window anchor overlay. Top controls stay in layout, with
+194 points of scene chrome including the glance target and stream padding. The left ornament
+reserves only the stream's 16-point padding. Sidebar text size uses a native popover. The guided
+tour temporarily uses the top arrangement so its spotlight and cards share the scene coordinate
+space; completing or dismissing it restores the saved left-side preference.
 
 The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
 only its own UIWindowScene and requests a bounded preferred size once per connected Mac-window
@@ -154,7 +179,6 @@ extreme-aspect sources can have letterboxing within the system's minimum window 
 connection/source selection starts a new sizing decision. Geometry requests remain system
 preferences and can be declined.
 
-Debug visual checks can use `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1`, and
-`-SillToolbarHidden 0|1` with the existing layout harness. The pure sizing check is
+Debug visual checks can use `-SillToolbar top|left`, `-SillToolbarAutomatic 0|1` with the existing layout harness. The pure sizing check is
 `Tests/checks/vision-window-size/run.sh`. Gaze, multiwindow focus, window sizing and physical input
 still require Vision Pro acceptance.

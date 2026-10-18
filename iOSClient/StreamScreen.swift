@@ -104,9 +104,12 @@ struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     #if os(visionOS)
     @SceneStorage("Sill.spatialToolbarPosition") private var spatialToolbarPosition = "top"
-    @SceneStorage("Sill.spatialToolbarHidden") private var spatialToolbarHidden = false
     @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
     @State private var spatialTextSizeOpen = false
+    @State private var spatialToolbarPresented = false
+    @State private var spatialToolbarHoverGeneration = 0
+    @State private var spatialToolbarScrollActive = false
+    @Namespace private var spatialToolbarHoverNamespace
     @Environment(\.accessibilityVoiceOverEnabled) private var spatialVoiceOver
     @Environment(\.openWindow) private var openSpatialWindow
     #endif
@@ -333,6 +336,9 @@ struct StreamScreen: View {
             .environment(\.visionToolbarPosition, $spatialToolbarPosition)
             .environment(\.visionToolbarAutomatic, $spatialToolbarAutomatic)
             .onChange(of: spatialToolbarPosition) { _, _ in closeWindowMenu(); scaleOpen = false; spatialTextSizeOpen = false }
+            .onChange(of: client.active) { _, _ in spatialToolbarScrollActive = false }
+            .onChange(of: client.connectedAt) { _, _ in spatialToolbarScrollActive = false }
+            .onChange(of: scenePhase) { _, _ in spatialToolbarScrollActive = false }
             #endif
             #if DEBUG
             // The console's line for the gates: what Larger Picture's rule made of the switch and of
@@ -346,7 +352,7 @@ struct StreamScreen: View {
         .background(Color.black)
         #endif
         .overlayPreferenceValue(WindowMenuAnchorKey.self) { anchor in
-            if let anchor, let id = windowMenu, let window = client.windows.first(where: { $0.id == id }) {
+            if let anchor, rootWindowMenuAllowed, let id = windowMenu, let window = client.windows.first(where: { $0.id == id }) {
                 WindowLightsMenu(anchor: anchor, window: window,
                                  command: { action in client.command(action, window: id); closeWindowMenu() },
                                  dismiss: closeWindowMenu,
@@ -579,9 +585,6 @@ struct StreamScreen: View {
         }
         if defaults.object(forKey: "SillToolbarAutomatic") != nil {
             spatialToolbarAutomatic = defaults.bool(forKey: "SillToolbarAutomatic")
-        }
-        if defaults.object(forKey: "SillToolbarHidden") != nil {
-            spatialToolbarHidden = defaults.bool(forKey: "SillToolbarHidden")
         }
         #endif
         let live = !client.mockDiscovery
@@ -1128,46 +1131,75 @@ struct StreamScreen: View {
     }
 
     #if os(visionOS)
+    private var spatialToolbarHoverGroup: HoverEffectGroup {
+        HoverEffectGroup(id: "toolbar-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
+    }
+
+    private var spatialToolbarUsesHover: Bool {
+        spatialToolbarAutomatic && !spatialToolbarPinned && !spatialToolbarPresented
+    }
+
     private func spatialLayout(size: CGSize) -> some View {
-        let sidebar = spatialToolbarPosition == "left"
-        let arrangement = sidebar ? AnyLayout(HStackLayout(spacing: 24)) : AnyLayout(VStackLayout(spacing: 24))
-        return arrangement {
-            if !spatialToolbarHidden {
-                if sidebar {
-                    VStack(spacing: 8) {
-                        ScrollView(.vertical) {
-                            spatialToolbar(sidebar: true, thumbnailHeight: min(200, max(100, size.height - 680)))
-                        }
-                            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-                            .clipShape(RoundedRectangle(cornerRadius: 24))
-                            .modifier(VisionToolbarReveal(automatic: spatialToolbarAutomatic && !spatialToolbarPinned, reduceMotion: reduceMotion))
-                        spatialVisibilityButton(hidden: false)
-                            .padding(.bottom, 8)
+        let sidebar = spatialToolbarPosition == "left" && tour == nil
+        let toolbarLength = max(750, size.width - 60)
+        return VStack(spacing: 24) {
+            if !sidebar {
+                VStack(spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        spatialToolbar(sidebar: false)
+                            .frame(width: toolbarLength)
                     }
-                    .frame(width: 132)
-                    .hoverEffectGroup()
-                } else {
-                    HStack(spacing: 0) {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            spatialToolbar(sidebar: false)
-                                // Fix the offered width so the thumbnail strip scrolls within
-                                // its budget instead of pushing Desktop and Settings offscreen.
-                                .frame(width: max(750, size.width - 60))
-                        }
-                        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
-                        .modifier(VisionToolbarReveal(automatic: spatialToolbarAutomatic && !spatialToolbarPinned, reduceMotion: reduceMotion))
-                        spatialVisibilityButton(hidden: false)
-                    }
+                    .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+                    .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                                  group: spatialToolbarHoverGroup))
                     .frame(height: BarMetrics.regular.height)
-                    .hoverEffectGroup()
+                    spatialVisibilityButton(sidebar: false)
                 }
+                .hoverEffectGroup(spatialToolbarHoverGroup)
             }
             contentArea(bar: .regular)
-                .overlay(alignment: sidebar ? .leading : .topTrailing) {
-                    if spatialToolbarHidden {
-                        spatialVisibilityButton(hidden: true).padding(12)
-                    }
+                .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+        }
+        .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+        .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
+            if sidebar {
+                HStack(spacing: 8) {
+                    // Ornaments remain interactive beyond the scene's bounds. Give the
+                    // preview strip all space left after the fixed controls, up to the
+                    // same length used by the horizontal toolbar.
+                    spatialToolbar(sidebar: true, thumbnailHeight: max(100, toolbarLength - 570))
+                        .frame(width: 132, height: toolbarLength)
+                        .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .trailing) {
+                            spatialSidebarWindowMenu
+                        }
+                        .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
+                        .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                                      group: spatialToolbarHoverGroup))
+                    spatialVisibilityButton(sidebar: true)
                 }
+                .hoverEffectGroup(spatialToolbarHoverGroup)
+                .padding(.trailing, 24)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var spatialSidebarWindowMenu: some View {
+        if let id = windowMenu, let window = client.windows.first(where: { $0.id == id }) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("\(window.appName) window actions").font(.headline)
+                Button("Close window", systemImage: "xmark") { client.command(.close, window: id); closeWindowMenu() }
+                Button("Minimize window", systemImage: "minus") { client.command(.minimize, window: id); closeWindowMenu() }
+                Button("Full screen", systemImage: "arrow.up.left.and.arrow.down.right") { client.command(.fullScreen, window: id); closeWindowMenu() }
+                Button("Open as own window", systemImage: "rectangle.on.rectangle") {
+                    guard let seed = client.spatialWindowSeed(source: .window(id)) else { return }
+                    let launch = VisionWindowLaunches.shared.register(seed)
+                    closeWindowMenu()
+                    openSpatialWindow(id: "sill-session", value: launch)
+                }
+                .disabled(client.spatialWindowSeed(source: .window(id)) == nil)
+            }
+            .padding(24)
         }
     }
 
@@ -1186,35 +1218,64 @@ struct StreamScreen: View {
         settingsOpen || drawerOpen || menusOpen || scaleOpen || spatialTextSizeOpen || keyboardToolsOpen || windowMenu != nil || tour != nil || spatialVoiceOver
     }
 
-    private func hideSpatialToolbar() {
-        closeWindowMenu(); scaleOpen = false; keyboardToolsOpen = false; spatialTextSizeOpen = false
-        drawerOpen = false; setSettings(false)
-        spatialToolbarHidden = true
+    private func spatialVisibilityButton(sidebar: Bool) -> some View {
+        let title = "Show toolbar"
+        return Button {
+            spatialToolbarPresented = true
+            spatialToolbarScrollActive = false
+        } label: {
+            Capsule()
+                .fill(.clear)
+                .frame(width: sidebar ? 10 : 44, height: sidebar ? 44 : 10)
+                .glassBackgroundEffect(in: Capsule())
+                .frame(width: 60, height: 60)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(title)
     }
 
-    private func spatialVisibilityButton(hidden: Bool) -> some View {
-        let title = hidden ? "Show toolbar" : spatialToolbarAutomatic ? "Always show toolbar" : "Hide toolbar"
-        return Button {
-            if hidden { spatialToolbarHidden = false; spatialToolbarAutomatic = false }
-            else if spatialToolbarAutomatic { spatialToolbarAutomatic = false }
-            else { hideSpatialToolbar() }
-        } label: {
-            Label(title, systemImage: hidden ? "sidebar.left" : spatialToolbarAutomatic ? "pin" : "chevron.compact.up")
-                .labelStyle(.iconOnly)
-                .frame(width: 44, height: 44)
-                .frame(width: 60, height: 60)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.bordered)
-        .hoverEffect(.highlight)
-        .help(title)
-        .contextMenu {
-            Button("Always show toolbar", systemImage: "pin") { spatialToolbarHidden = false; spatialToolbarAutomatic = false }
-            Button("Show when looking", systemImage: "eye") { spatialToolbarHidden = false; spatialToolbarAutomatic = true }
-            Button("Hide toolbar", systemImage: "sidebar.left") { hideSpatialToolbar() }
+    /// An explicit remote click, scroll or key starts control. Merely moving a
+    /// pointer (including hover) or selecting a preview does not dismiss tools.
+    private var spatialSurfaceInputSender: (InputEvent) -> Void {
+        let send = client.surfaceInputSender
+        let session = client.connectedAt, source = client.active
+        return { event in
+            guard client.connected, session != nil, session == client.connectedAt,
+                  source != .none, source == client.active, !client.inputPaused else {
+                send(event)
+                return
+            }
+            let controlling: Bool
+            switch event {
+            case .pointer(.leftDown, _, _), .pointer(.rightDown, _, _),
+                 .key(_, true, _), .text: controlling = true
+            case .scroll: controlling = !spatialToolbarScrollActive
+            case .scrollGesture(.began, _, _), .scrollGesture(.momentumBegan, _, _):
+                controlling = !spatialToolbarScrollActive
+                spatialToolbarScrollActive = true
+            case .scrollGesture(.ended, _, _), .scrollGesture(.momentumEnded, _, _):
+                controlling = false
+                spatialToolbarScrollActive = false
+            default: controlling = false
+            }
+            if controlling {
+                spatialToolbarPresented = false
+                spatialToolbarHoverGeneration += 1
+            }
+            send(event)
         }
     }
     #endif
+
+    private var rootWindowMenuAllowed: Bool {
+        #if os(visionOS)
+        spatialToolbarPosition != "left" || tour != nil
+        #else
+        true
+        #endif
+    }
 
     private static var nativeToolbarButtons: Int {
         #if os(visionOS)
@@ -1283,7 +1344,13 @@ struct StreamScreen: View {
                 StreamView(client: client)
                 // Same frame as the video, so a touch maps straight onto the streamed frame.
                 InputOverlay(videoSize: client.videoSize,
-                             send: client.surfaceInputSender,
+                             send: {
+                                 #if os(visionOS)
+                                 spatialSurfaceInputSender
+                                 #else
+                                 client.surfaceInputSender
+                                 #endif
+                             }(),
                              setOwnPointer: client.surfacePointerSender,
                              pointerFeed: { client.pointerFeedState },
                              cancelRemoteKeyboardRequest: {

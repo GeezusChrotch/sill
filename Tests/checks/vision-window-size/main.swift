@@ -10,17 +10,17 @@ func size(_ width: CGFloat, _ height: CGFloat, _ toolbar: VisionWindowSizePolicy
     return result
 }
 let landscape = size(1000, 700, .top)
-expect(landscape == CGSize(width: 1016, height: 826), "Top chrome must fit source without scaling ordinary windows")
+expect(landscape == CGSize(width: 1016, height: 894), "Top chrome must fit source without scaling ordinary windows")
 let left = size(1000, 700, .left)
-expect(left == CGSize(width: 1172, height: 716), "Left chrome must leave source height intact")
+expect(left == CGSize(width: 1016, height: 716), "Left ornament must reserve no stream viewport space")
 let hidden = size(1000, 700, .hidden)
 expect(hidden == CGSize(width: 1016, height: 716), "Hidden toolbar reserves only stream padding")
 let portrait = size(600, 1200, .top)
 expect(portrait.height == 1050 && portrait.width < portrait.height, "Portrait fit must stay bounded and portrait")
-expect(abs((portrait.width - 16) / (portrait.height - 126) - 0.5) < 0.001, "Fit changed portrait source aspect")
+expect(abs((portrait.width - 16) / (portrait.height - 194) - 0.5) < 0.001, "Fit changed portrait source aspect")
 expect(size(60, 40, .left) == VisionWindowSizePolicy.minimum, "Tiny sources must remain usable")
 let huge = size(10000, 6000, .left)
-expect(abs((huge.width - 172) / (huge.height - 16) - 10000.0 / 6000.0) < 0.001, "Huge fit changed source aspect")
+expect(abs((huge.width - 16) / (huge.height - 16) - 10000.0 / 6000.0) < 0.001, "Huge fit changed source aspect")
 for bad in [CGSize.zero, CGSize(width: 0, height: 10), CGSize(width: -1, height: 10), CGSize(width: CGFloat.infinity, height: 10), CGSize(width: 10, height: CGFloat.nan)] {
     expect(VisionWindowSizePolicy.sceneSize(source: bad, toolbar: .top) == nil, "Invalid geometry must wait for a real source")
 }

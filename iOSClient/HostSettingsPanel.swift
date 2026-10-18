@@ -495,10 +495,10 @@ struct HostSettingsPanel: View {
             }
             if let toolbarAutomatic {
                 Rows {
-                    Toggle("Show toolbar when looking", isOn: toolbarAutomatic).rowFrame()
+                    Toggle("Always show toolbar", isOn: Binding(get: { !toolbarAutomatic.wrappedValue }, set: { toolbarAutomatic.wrappedValue = !$0 })).rowFrame()
                 }
             }
-            Footnote(text: "Look toward the toolbar to reveal it. Pin it to keep it visible. These choices are saved separately for each Sill window.")
+            Footnote(text: "Look toward the frosted pill to reveal the toolbar, or tap it to keep the toolbar visible until you control the remote window. Always show keeps the toolbar visible. These choices are saved separately for each Sill window.")
         }
         #endif
         if offersLargerPicture {
