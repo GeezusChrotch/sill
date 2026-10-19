@@ -199,6 +199,7 @@ Both bars are native ornaments outside the picture, so reveal and collapse do no
 Both bars sit 12 points from the window. The lock is the last control, immediately after
 Settings in the left bar's scrolling stack; there is no fixed top slot or large spacer.
 Window previews scroll horizontally. Window actions and text size retain native popovers.
+Settings opens along the leading edge of the picture beside its left toolbar button.
 The guided tour temporarily retains its full inline toolbar so its spotlight targets share
 the scene coordinate space.
 
@@ -237,11 +238,13 @@ left controls. VoiceOver keeps a short action hint naming the next mode.
 On visionOS 26+, one scene-local `HoverEffectGroup` controls both bars. A no-op hover effect
 on the content surface uses `preservesGroup`: looking back at the picture keeps an already
 revealed group active without revealing an inactive one. In Auto, an accepted remote click,
-key, text insertion or scroll starts a control episode and changes that scene's group identity,
-allowing both bars to collapse together. Pointer hover/movement and preview selection do not
+key, text insertion or scroll starts a control episode. Build37 keeps one stable group identity
+on visionOS26+ and uses one disabled empty effect to request the native temporary inactive
+phase for the group, allowing both bars to collapse together. Pointer hover/movement and preview selection do not
 dismiss them. No gaze coordinates or gaze state enter app code. Looking outside this app can
 end the group after a one-second exit delay. On visionOS 2–25, the persistence API is unavailable:
-gaze reveal retains the one-second exit grace; the lock button can pin both bars open. Actual gaze
+gaze reveal retains the one-second exit grace and the existing generation-ID reset fallback;
+the lock button can pin both bars open. Actual gaze
 transitions and hidden-control hit testing remain real-headset acceptance checks.
 
 The login scene starts at 580 × 480 points with a reusable Sill logo. The native size bridge uses
@@ -304,3 +307,12 @@ error code. Source kinds: 0 login, 1 window, 2 Desktop, 3 none. Phases: 1 releas
 Desktop HEVC dimensions (transport event, scene ordinal 0). Writes run on a serial utility queue;
 no video, titles, source identifiers, hosts, addresses, or user content are saved. This small cache
 is diagnostic evidence for an installed headset test and is overwritten as events arrive.
+
+Build37 is a focused lifecycle candidate: it removes action-driven group identity churn on26+
+while leaving native-menu lifecycle unchanged. It preserves build36's gaze presentation and its known
+static hidden-bar geometry limitation. Extra focus zones are not yet confirmed fixed; see
+`docs/vision-build37-focus-lifecycle-proposal.md` for evidence and reproduction checks.
+
+Build37 also confines native button/pill highlights to their own targets: the shared group
+coordinates explicit bar/pill fades, not every descendant highlight. The owner-reported
+corner phantoms still require physical comparison; local hidden-control geometry is unchanged.

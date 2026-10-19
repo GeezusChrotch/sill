@@ -116,8 +116,7 @@ struct StreamScreen: View {
         get { spatialPreferences?.wrappedValue.textScale ?? 0 }
         nonmutating set { spatialPreferences?.wrappedValue.textScale = newValue }
     }
-    @State private var spatialToolbarHoverGeneration = 0
-    @State private var spatialToolbarScrollActive = false
+    @State private var spatialToolbarHover = VisionToolbarHoverCycle()
     @Namespace private var spatialToolbarHoverNamespace
     @Environment(\.accessibilityVoiceOverEnabled) private var spatialVoiceOver
     @Environment(\.openWindow) private var openSpatialWindow
@@ -348,9 +347,18 @@ struct StreamScreen: View {
             .duoStatusBar(posture, size: geo.size)
             .environment(\.largerPictureOffered, offersLarger)
             #if os(visionOS)
-            .onChange(of: client.active) { _, _ in spatialToolbarScrollActive = false }
-            .onChange(of: client.connectedAt) { _, _ in spatialToolbarScrollActive = false }
-            .onChange(of: scenePhase) { _, _ in spatialToolbarScrollActive = false }
+            .onChange(of: client.active) { _, _ in spatialToolbarHover.resetScrollEpisode() }
+            .onChange(of: client.connectedAt) { _, _ in spatialToolbarHover.resetScrollEpisode() }
+            .onChange(of: scenePhase) { _, _ in spatialToolbarHover.resetScrollEpisode() }
+            #if DEBUG
+            .onChange(of: spatialToolbarHover.generation) { _, generation in
+                if UserDefaults.standard.bool(forKey: "SillToolbarHoverTrace") {
+                    // Counts app-owned resets and distinct IDs requested, never private gaze state.
+                    NSLog("TOOLBAR_HOVER reset=%d native=%d requestedGroupIDs=%d", generation,
+                          spatialToolbarNativeReset ? 1 : 0, spatialToolbarNativeReset ? 1 : generation + 1)
+                }
+            }
+            #endif
             #endif
             #if DEBUG
             // The console's line for the gates: what Larger Picture's rule made of the switch and of
@@ -1170,8 +1178,20 @@ struct StreamScreen: View {
     }
 
     #if os(visionOS)
+    private var spatialToolbarNativeReset: Bool {
+        if #available(visionOS 26.0, *) {
+            #if DEBUG
+            return !UserDefaults.standard.bool(forKey: "SillToolbarLegacyReset")
+            #else
+            return true
+            #endif
+        }
+        return false
+    }
+
     private var spatialToolbarHoverGroup: HoverEffectGroup {
-        HoverEffectGroup(id: "toolbar-\(spatialToolbarHoverGeneration)", in: spatialToolbarHoverNamespace)
+        HoverEffectGroup(id: spatialToolbarHover.groupID(nativeReset: spatialToolbarNativeReset),
+                         in: spatialToolbarHoverNamespace)
     }
 
     private var spatialToolbarUsesHover: Bool {
@@ -1188,6 +1208,9 @@ struct StreamScreen: View {
             }
             contentArea(bar: .regular)
                 .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
+                .modifier(VisionToolbarReset(group: spatialToolbarHoverGroup,
+                                            generation: spatialToolbarHover.generation,
+                                            nativeReset: spatialToolbarNativeReset))
         }
         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
             if tour == nil {
@@ -1219,7 +1242,6 @@ struct StreamScreen: View {
             .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                           group: spatialToolbarHoverGroup))
         }
-        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     @ViewBuilder
@@ -1255,7 +1277,6 @@ struct StreamScreen: View {
             .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                           group: spatialToolbarHoverGroup))
         }
-        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200, content: TopBar.Content = .all) -> some View {
@@ -1283,9 +1304,9 @@ struct StreamScreen: View {
                   height: BarMetrics.regular.buttonHeight,
                   accessibilityLabel: spatialToolbarAutomatic ? "Pin toolbars open" : "Automatically hide toolbars") {
             spatialToolbarAutomatic.toggle()
-            spatialToolbarScrollActive = false
+            spatialToolbarHover.resetScrollEpisode()
             // Returning to Auto begins a fresh hidden phase for both bars.
-            spatialToolbarHoverGeneration += 1
+            spatialToolbarHover.reset()
         } content: {
             Image(systemName: spatialToolbarAutomatic ? "lock.open" : "lock")
                 .font(.system(size: 22))
@@ -1301,27 +1322,9 @@ struct StreamScreen: View {
         let send = client.surfaceInputSender
         let session = client.connectedAt, source = client.active
         return { event in
-            guard client.connected, session != nil, session == client.connectedAt,
-                  source != .none, source == client.active, !client.inputPaused else {
-                send(event)
-                return
-            }
-            let controlling: Bool
-            switch event {
-            case .pointer(.leftDown, _, _), .pointer(.rightDown, _, _),
-                 .key(_, true, _), .text: controlling = true
-            case .scroll: controlling = !spatialToolbarScrollActive
-            case .scrollGesture(.began, _, _), .scrollGesture(.momentumBegan, _, _):
-                controlling = !spatialToolbarScrollActive
-                spatialToolbarScrollActive = true
-            case .scrollGesture(.ended, _, _), .scrollGesture(.momentumEnded, _, _):
-                controlling = false
-                spatialToolbarScrollActive = false
-            default: controlling = false
-            }
-            if controlling {
-                if spatialToolbarAutomatic { spatialToolbarHoverGeneration += 1 }
-            }
+            let admitted = client.connected && session != nil && session == client.connectedAt &&
+                source != .none && source == client.active && !client.inputPaused
+            spatialToolbarHover.input(event, automatic: spatialToolbarAutomatic, admitted: admitted)
             send(event)
         }
     }
@@ -1453,9 +1456,9 @@ struct StreamScreen: View {
                     .transition(.opacity)
             }
 
-            // The drawer's mirror on the trailing edge, its right side lined up with the Settings
-            // button's. No dim: the stream stays as it is, so a change can be watched taking effect.
-            // A tap on it closes the panel and never clicks the Mac; the bar above stays live.
+            // Align Settings with its toolbar: leading on visionOS, trailing on iPad.
+            // No dim: the stream stays visible so changes can be watched taking effect.
+            // A tap outside closes the panel and never clicks the Mac; the toolbar stays live.
             if settingsOpen {
                 Color.clear
                     .contentShape(Rectangle())
@@ -1468,9 +1471,15 @@ struct StreamScreen: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 8)
                     .padding(.bottom, 14)
+                    #if os(visionOS)
+                    .padding(.leading, bar.padding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(settingsTransition(anchor: .topLeading))
+                    #else
                     .padding(.trailing, bar.padding)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .transition(settingsTransition())
+                    #endif
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
