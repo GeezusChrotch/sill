@@ -202,12 +202,25 @@ Window previews scroll horizontally. Window actions and text size retain native 
 The guided tour temporarily retains its full inline toolbar so its spotlight targets share
 the scene coordinate space.
 
-In Auto, a visible frosted horizontal pill sits at the top and a vertical pill sits on the
-left, centered inside each future bar's footprint. Looking at either pill activates the
-shared hover group. Both bars fade over the pills in the same native ornament ZStacks;
-the pills fade out as the bars appear. The pills have no icon, text or tap action. Their
-nonzero frosted surfaces use native hover highlight, with explicit hover content shapes.
-Actual gaze transitions remain a physical headset acceptance check.
+Build 36 restores the build 34 toolbar presentation after the owner rejected build 35 on
+headset: its bars flickered open and closed, and controls and windows became unselectable.
+The native hover-presented ornament approach and explicit pill-tap fallback introduced in
+build 35 are removed. Pointer ownership fixes, Settings window management, restore exclusions
+and prototype dead-code removals from build 35 remain.
+
+In Auto, a black pill at 50% opacity sits at the top and another on the left, centered
+inside each bar's footprint. Each is 24 points thick and one third of the corresponding
+window dimension long. Looking at either pill activates the shared hover group after a
+0.65-second dwell. Both bars fade over the pills in the same native ornament ZStacks;
+the pills fade out as the bars appear. The pills have no icon, text or tap action and use
+native hover highlight with explicit hover content shapes.
+
+The restored implementation keeps the full-size bars mounted and hides them using compositor
+opacity. The prior limitation involving full toolbar hover geometry remains unresolved;
+this rollback does not establish compact-only activation or absence of hidden-control hit
+targets. Build 36 still requires physical headset confirmation of stable reveal and usable
+controls. Native hover presentation feedback is a possible cause of build 35's regression,
+not a proven diagnosis.
 
 The left bar's last lock button switches between pinned open and Auto. Its icon shows an
 open lock in Auto and a closed lock when pinned. The choice persists per scene, with Auto

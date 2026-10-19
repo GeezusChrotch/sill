@@ -117,7 +117,6 @@ struct StreamScreen: View {
         nonmutating set { spatialPreferences?.wrappedValue.textScale = newValue }
     }
     @State private var spatialToolbarHoverGeneration = 0
-    @State private var spatialToolbarManualReveal = false
     @State private var spatialToolbarScrollActive = false
     @Namespace private var spatialToolbarHoverNamespace
     @Environment(\.accessibilityVoiceOverEnabled) private var spatialVoiceOver
@@ -1176,7 +1175,7 @@ struct StreamScreen: View {
     }
 
     private var spatialToolbarUsesHover: Bool {
-        spatialToolbarAutomatic && !spatialToolbarPinned && !spatialToolbarManualReveal
+        spatialToolbarAutomatic && !spatialToolbarPinned
     }
 
     private func spatialLayout(size: CGSize) -> some View {
@@ -1192,40 +1191,35 @@ struct StreamScreen: View {
         }
         .ornament(attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
             if tour == nil {
-                if spatialToolbarUsesHover {
-                    VisionToolbarGlanceTarget(vertical: false, length: size.width / 3, reduceMotion: reduceMotion,
-                        group: spatialToolbarHoverGroup, reveal: { spatialToolbarManualReveal = true })
-                        .padding(.bottom, 12)
-                } else { spatialTopToolbar(size: size, length: toolbarLength).padding(.bottom, 12) }
+                spatialTopToolbar(size: size, length: toolbarLength)
+                    .padding(.bottom, 12)
             }
         }
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
             if tour == nil {
-                if spatialToolbarUsesHover {
-                    VisionToolbarGlanceTarget(vertical: true, length: size.height / 3, reduceMotion: reduceMotion,
-                        group: spatialToolbarHoverGroup, reveal: { spatialToolbarManualReveal = true })
-                        .padding(.trailing, 12)
-                } else { spatialControlsBar(height: max(180, min(750, size.height))).padding(.trailing, 12) }
+                spatialControlsBar(height: max(180, min(750, size.height)), glanceLength: size.height / 3)
+                    .padding(.trailing, 12)
             }
         }
-        .modifier(VisionToolbarPresentation(automatic: spatialToolbarUsesHover && tour == nil,
-                    group: spatialToolbarHoverGroup, anchor: .top, alignment: .bottom) {
-            spatialTopToolbar(size: size, length: toolbarLength).padding(.bottom, 12)
-        })
-        .modifier(VisionToolbarPresentation(automatic: spatialToolbarUsesHover && tour == nil,
-                    group: spatialToolbarHoverGroup, anchor: .leading, alignment: .trailing) {
-            spatialControlsBar(height: max(180, min(750, size.height))).padding(.trailing, 12)
-        })
     }
 
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            spatialToolbar(sidebar: false, content: .previews).frame(width: length)
+        ZStack {
+            if spatialToolbarUsesHover {
+                VisionToolbarGlanceTarget(vertical: false, length: size.width / 3, reduceMotion: reduceMotion,
+                                         group: spatialToolbarHoverGroup)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                spatialToolbar(sidebar: false, content: .previews).frame(width: length)
+            }
+            .frame(width: size.width, height: BarMetrics.regular.height)
+            .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
+                spatialSidebarWindowMenu
+            }
+            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                          group: spatialToolbarHoverGroup))
         }
-        .frame(width: size.width, height: BarMetrics.regular.height)
-        .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
-            spatialSidebarWindowMenu
-        }
+        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     @ViewBuilder
@@ -1248,11 +1242,20 @@ struct StreamScreen: View {
         }
     }
 
-    private func spatialControlsBar(height: CGFloat) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            spatialToolbar(sidebar: true, content: .controls)
+    private func spatialControlsBar(height: CGFloat, glanceLength: CGFloat) -> some View {
+        ZStack {
+            if spatialToolbarUsesHover {
+                VisionToolbarGlanceTarget(vertical: true, length: glanceLength, reduceMotion: reduceMotion,
+                                         group: spatialToolbarHoverGroup)
+            }
+            ScrollView(.vertical, showsIndicators: false) {
+                spatialToolbar(sidebar: true, content: .controls)
+            }
+            .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
+            .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
+                                          group: spatialToolbarHoverGroup))
         }
-        .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
+        .hoverEffectGroup(spatialToolbarHoverGroup)
     }
 
     private func spatialToolbar(sidebar: Bool, thumbnailHeight: CGFloat = 200, content: TopBar.Content = .all) -> some View {
@@ -1280,7 +1283,6 @@ struct StreamScreen: View {
                   height: BarMetrics.regular.buttonHeight,
                   accessibilityLabel: spatialToolbarAutomatic ? "Pin toolbars open" : "Automatically hide toolbars") {
             spatialToolbarAutomatic.toggle()
-            spatialToolbarManualReveal = false
             spatialToolbarScrollActive = false
             // Returning to Auto begins a fresh hidden phase for both bars.
             spatialToolbarHoverGeneration += 1
@@ -1318,10 +1320,7 @@ struct StreamScreen: View {
             default: controlling = false
             }
             if controlling {
-                if spatialToolbarAutomatic {
-                    spatialToolbarManualReveal = false
-                    spatialToolbarHoverGeneration += 1
-                }
+                if spatialToolbarAutomatic { spatialToolbarHoverGeneration += 1 }
             }
             send(event)
         }
