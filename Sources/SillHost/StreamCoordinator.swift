@@ -56,6 +56,7 @@ package final class StreamCoordinator {
         var selections: [UUID: Set<UInt32>] = [:]
         var fitOwners: [UInt32: UUID] = [:]
         var staging: [UUID: UInt32] = [:]
+        var stages: [UUID: VirtualStage] = [:]
         var ledger = WindowRestore.Ledger<WindowSizer.Placement>()
         func reserve(_ id: UInt32, for owner: UUID) {
             selections[owner, default: []].insert(id)
@@ -343,7 +344,7 @@ package final class StreamCoordinator {
                  homePairing: Bool = false, testHooks: Bool = true, hostVersion: String? = nil,
                  pipelineServer: StreamServer? = nil, pipelineParent: StreamCoordinator? = nil) throws {
         var config = config.validated()
-        if !appKitLoop || pipelineParent != nil { config.virtualDisplay = false }
+        if !appKitLoop { config.virtualDisplay = false }
         self.pipelineParent = pipelineParent
         injector = pipelineParent?.injector ?? InputInjector()
         physicalWindows = pipelineParent?.physicalWindows ?? PhysicalWindows()
@@ -389,7 +390,11 @@ package final class StreamCoordinator {
         self.remote = remote
         // Direct Wireless is the listener's: built with it at start, replaced when it changes (adopt).
         server.setPeerToPeer(config.directWireless)
-        stage = VirtualStage(sizer: sizer, catalog: catalog)
+        // Stable simultaneous display slots; a departed session releases its slot only after teardown.
+        let usedSerials = Set(pipelineParent?.independentCoordinators.values.map { $0.stage.serialNum } ?? [])
+        let serial = pipelineParent == nil ? UInt32(1) : (UInt32(2)...UInt32.max).first { !usedSerials.contains($0) }!
+        stage = VirtualStage(sizer: sizer, catalog: catalog, serialNum: serial)
+        physicalWindows.stages[pipelineID] = stage
         // Sill's own motion is Sill's: the server counts each device's input, the injector notes
         // each post just before it (and a synthetic host posts nothing: the test pattern is not the
         // screen, docs/pointer-visibility-plan.md Q10), the stage its warp home.
@@ -397,11 +402,18 @@ package final class StreamCoordinator {
         if pipelineParent == nil { injector.watch = pointer }
         injector.dryRun = synthetic
         injector.testLog = synthetic && inputLog.on
-        stage.onWarp = { [pointer] in pointer.sillMoved() }
+        stage.onWarp = { [weak self] in
+            guard let self else { return }
+            let root = self.pipelineParent ?? self
+            (root.inputCoordinator ?? root).pointer.sillMoved()
+        }
+        stage.canEvict = { [weak physicalWindows, pipelineID] id in
+            !(physicalWindows?.stages.contains { $0.key != pipelineID && $0.value.placement?.windowID == id } ?? false)
+        }
         // The identity's TXT record (its tag, and `p` on a TLS home door) must be in the first
         // registration: set before `server.start()`.
         if pipelineParent == nil { remote?.attach(server: server, status: status, macName: macName, requirePairing: config.requirePairing) }
-        catalog.preferMainDisplay = virtualDisplay   // the Desktop source must never capture the virtual display
+        catalog.preferMainDisplay = true   // the Desktop source must never capture the virtual display
         stage.onLost = { [weak self] in Task { @MainActor in await self?.stageLost() } }
         status.update { $0.synthetic = synthetic; $0.virtualDisplayOn = config.virtualDisplay }
         // Every change of the snapshot re-publishes the devices' settings state (deduplicated, so
@@ -800,7 +812,7 @@ package final class StreamCoordinator {
     package func setTarget(_ requested: HostConfig) -> Bool {
         guard !shuttingDown else { return false }
         var new = requested.validated()
-        if !appKitLoop || isIndependent { new.virtualDisplay = false }
+        if !appKitLoop { new.virtualDisplay = false }
         if !isIndependent {
             let previous = target
             for child in independentCoordinators.values {
@@ -813,6 +825,7 @@ package final class StreamCoordinator {
                 if new.awayBitrate != previous.awayBitrate { inherited.awayBitrate = new.awayBitrate }
                 if new.awayCaptureScale != previous.awayCaptureScale { inherited.awayCaptureScale = new.awayCaptureScale }
                 if new.prioritizeSpeed != previous.prioritizeSpeed { inherited.prioritizeSpeed = new.prioritizeSpeed }
+                if new.virtualDisplay != previous.virtualDisplay { inherited.virtualDisplay = new.virtualDisplay }
                 if new.directWireless != previous.directWireless { inherited.directWireless = new.directWireless }
                 if new.remoteAccess != previous.remoteAccess { inherited.remoteAccess = new.remoteAccess }
                 if new.remotePort != previous.remotePort { inherited.remotePort = new.remotePort }
@@ -925,7 +938,7 @@ package final class StreamCoordinator {
             || old.requirePairing != next.requirePairing {
             remote?.apply(next)
         }
-        catalog.preferMainDisplay = next.virtualDisplay   // the Desktop source must never capture the virtual display
+        catalog.preferMainDisplay = true   // the Desktop source must never capture the virtual display
         if old.virtualDisplay && !next.virtualDisplay {
             stage.release()        // idempotent: select has already sent a staged window home
             status.update { $0.lastStageFailure = nil }
@@ -956,6 +969,7 @@ package final class StreamCoordinator {
     /// A window is staged on the virtual display and in a full-screen Space there. The app's Quit
     /// takes it out of full screen first (`beginLeavingFullScreenForQuit`), or it cannot go home.
     package var stagedWindowIsFullScreen: Bool {
+        if independentCoordinators.values.contains(where: { $0.stagedWindowIsFullScreen }) { return true }
         guard let p = stage.placement else { return false }
         return WindowSizer.isFullScreen(p.element)
     }
@@ -963,7 +977,8 @@ package final class StreamCoordinator {
     /// Presses the staged window's full-screen button; the app's Quit then waits for
     /// `stagedWindowSettled`.
     package func beginLeavingFullScreenForQuit() {
-        guard let p = stage.placement else { return }
+        for child in independentCoordinators.values { child.beginLeavingFullScreenForQuit() }
+        guard let p = stage.placement, WindowSizer.isFullScreen(p.element) else { return }
         _ = WindowSizer.perform(.fullScreen, element: p.element)
     }
 
@@ -971,6 +986,7 @@ package final class StreamCoordinator {
     /// put back where it was. Leaving full screen, a window is off every list for about a second;
     /// the same test as `VirtualStage.leaveFullScreenIfNeeded`.
     package var stagedWindowSettled: Bool {
+        guard independentCoordinators.values.allSatisfy({ $0.stagedWindowSettled }) else { return false }
         guard let p = stage.placement else { return true }
         return !WindowSizer.isFullScreen(p.element) && WindowSizer.liveBounds(of: p.windowID) != nil
     }
@@ -1234,7 +1250,7 @@ package final class StreamCoordinator {
             settingsArrivals[id] = recent
             // A connection whose route is not known (never: it is set before any message is
             // handled) counts as remote, so nothing it sends can widen exposure.
-            let (accepted, refused) = DeviceSettings.accepted(change, virtualDisplayAvailable: appKitLoop && !isIndependent,
+            let (accepted, refused) = DeviceSettings.accepted(change, virtualDisplayAvailable: appKitLoop,
                                                         fromRemote: routes[id].map { $0.isRemote } ?? true)
             var ok = accepted
             if !refused.isEmpty { print("Settings from \(who) refused: \(refused.joined(separator: ", "))") }
@@ -1456,13 +1472,16 @@ package final class StreamCoordinator {
         guard !switching, !shuttingDown else { return }
         if case .window(let id) = source {
             let root = pipelineParent ?? self
-            // A private display is physically owned by the legacy pipeline. It cannot safely be
-            // restored or moved while another pipeline captures its staged rectangle.
-            if isIndependent, root.stage.placement?.windowID == id || root.physicalWindows.staging.values.contains(id) {
-                for connection in connections.values {
-                    server.goodbye(Goodbye(reason: "windowStaged", message: "This window is on Sill’s Virtual Display. Turn Virtual Display off on the Mac before opening it in another Sill window.", reconnect: false), to: connection)
-                }
+            // Reservations cover both a move in flight and a committed stage. A second viewer
+            // cannot borrow a display whose owner may restore/destroy it independently.
+            if root.physicalWindows.staging.contains(where: { $0.key != pipelineID && $0.value == id })
+                || root.physicalWindows.stages.contains(where: { $0.key != pipelineID && $0.value.placement?.windowID == id }) {
+                status.update { $0.lastStageFailure = "This window is already on another Sill Virtual Display. Select a different Mac window or turn Virtual Display off in its owning session." }
+                broadcastList()
                 return
+            }
+            status.update {
+                if $0.lastStageFailure?.hasPrefix("This window is already") == true { $0.lastStageFailure = nil }
             }
             physicalWindows.reserve(id, for: pipelineID)
         }
@@ -1604,11 +1623,24 @@ package final class StreamCoordinator {
                 await catalog.refreshWindows()
                 found = catalog.window(id: id)
             }
-            guard let w = found else {
+            guard var w = found else {
                 if virtualDisplay { stage.release() }
                 active = .none; broadcastList(); return
             }
             print("Selecting window \(w.windowID) \(w.owningApplication?.applicationName ?? "?") — \(w.title ?? "") frame \(w.frame) onScreen \(w.isOnScreen) active \(w.isActive)")
+            // AX frontmost/raise alone does not consistently switch to an app's full-screen
+            // Space. An explicit off-Space pick may activate it, then refresh this exact ID:
+            // ScreenCaptureKit handles obtained before the Space transition can deliver no frames.
+            if comeForward, !w.isOnScreen, ownsInputFocus, !shuttingDown,
+               let pid = w.owningApplication?.processID,
+               let app = NSRunningApplication(processIdentifier: pid) {
+                app.activate(options: [.activateAllWindows])
+                guard let fresh = await catalog.freshWindowAfterActivation(id: id) else {
+                    stage.release(); active = .none; broadcastList(); return
+                }
+                w = fresh
+                guard !shuttingDown else { active = .none; return }
+            }
             picked = w
             listedFullScreen = WindowRestore.coversDisplay(w.frame, WindowSizer.displayFrames()) ? id : nil
             title = Self.menuTitle(for: w)
@@ -1825,6 +1857,9 @@ package final class StreamCoordinator {
         while switching { try? await Task.sleep(for: .milliseconds(10)) }
         await capture.stop(); await syntheticCapture.stop()
         capture.onFrame = nil; syntheticCapture.onFrame = nil; encoder = nil
+        await stage.leaveFullScreenIfNeeded()
+        stage.release()
+        physicalWindows.stages[pipelineID] = nil
         active = .none
         physicalWindows.staging[pipelineID] = nil
         physicalWindows.retain(.none, for: pipelineID)
@@ -2292,6 +2327,7 @@ package final class StreamCoordinator {
     package func shutdownForExit() {
         for child in independentCoordinators.values {
             child.cancelPendingInput(); child.shuttingDown = true
+            child.stage.release()
             child.physicalWindows.retain(.none, for: child.pipelineID)
         }
         cancelPendingInput()
@@ -2309,6 +2345,7 @@ package final class StreamCoordinator {
     package func releaseKeysForExit() {
         for child in independentCoordinators.values {
             child.cancelPendingInput(); child.shuttingDown = true
+            child.stage.release()
             child.physicalWindows.retain(.none, for: child.pipelineID)
         }
         cancelPendingInput()
@@ -2838,7 +2875,7 @@ package final class StreamCoordinator {
         }
         return HostSettingsState(settings: t.streamSettings(away: thisAway),
                                  persistent: onDeviceSettingsChange != nil,
-                                 virtualDisplayAvailable: appKitLoop && !isIndependent,
+                                 virtualDisplayAvailable: appKitLoop,
                                  virtualDisplayNote: virtualDisplayNote(target: t, snapshot: s),
                                  softwareEncoder: s.softwareEncoder,
                                  stream: active == .none ? nil : s.stream?.wire,
@@ -2851,9 +2888,9 @@ package final class StreamCoordinator {
     /// permission lines: permissions are polled, not event-driven, and a missing one still reaches
     /// the device as the fallback reason on the next pick.
     private func virtualDisplayNote(target t: HostConfig, snapshot s: HostStatusSnapshot) -> String? {
-        if isIndependent { return "Independent Sill windows capture the Mac’s real windows. Virtual Display is unavailable in this session." }
         if !appKitLoop { return "Start SillHost with --virtual-display to use it." }
         if s.virtualDisplayAPIMissing, let p = s.virtualDisplayProblem { return "Not available on this version of macOS: \(p)" }
+        if let f = s.lastStageFailure, f.hasPrefix("This window is already") { return f }
         guard t.virtualDisplay else { return nil }
         if let p = s.virtualDisplayProblem { return "Off for this session: \(p). Turn it off and on to try again." }
         if let f = s.lastStageFailure { return "The last window streamed where it is: \(f)" }

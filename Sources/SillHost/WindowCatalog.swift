@@ -147,6 +147,22 @@ final class WindowCatalog {
         return all.windows.first { $0.windowID == id && !Self.isOwn($0) }
     }
 
+    /// A picked off-Space window may need a Space activation before it repaints. Always fetch
+    /// fresh handles for that exact ID; never substitute the app’s first window or a cached handle.
+    func freshWindowAfterActivation(id: UInt32) async -> SCWindow? {
+        let deadline = Date().addingTimeInterval(1.5)
+        var latest: SCWindow?
+        repeat {
+            if let all = await Self.shareableContent(excludingDesktopWindows: false, onScreenWindowsOnly: false, timeout: 0.5),
+               let window = all.windows.first(where: { $0.windowID == id && !Self.isOwn($0) }) {
+                latest = window
+                if window.isOnScreen { return window }
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline && !Task.isCancelled
+        return latest
+    }
+
     /// `ownApplication`, else one look at every window (on screen or not) for this process. The
     /// on-screen look can miss Sill while it shows nothing on screen: its status item's window
     /// leaves the list while a full-screen app hides the menu bar, and a Desktop stream started
@@ -262,8 +278,9 @@ final class WindowCatalog {
         guard seq > appliedSeq else { return }      // a newer refresh already landed; don't go backwards
         appliedSeq = seq
         ownApplication = content.applications.first { $0.processID == Self.ownPID }
+        let physicalDisplays = content.displays.filter { CGDisplayVendorNumber($0.displayID) != VirtualStage.vendorID }
         display = preferMainDisplay
-            ? (content.displays.first { $0.displayID == CGMainDisplayID() } ?? content.displays.first)
+            ? (physicalDisplays.first { $0.displayID == CGMainDisplayID() } ?? physicalDisplays.first)
             : content.displays.first
         visible = visible.filter { $0.isOnScreen || $0.windowID == stagedWindowID || offscreen.contains($0.windowID) }
         // The system's order is not front-to-back and shuffles between polls. The brief wants a
