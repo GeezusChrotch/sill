@@ -97,6 +97,11 @@ struct MacMenuTrigger: UIViewRepresentable {
         // would put Help first and a File menu's Quit before its New.
         button.preferredMenuElementOrder = .fixed
         button.backgroundColor = .clear
+        #if os(visionOS)
+        // This UIKit overlay owns interaction; the SwiftUI BarButton beneath it only draws.
+        // Give its system highlight the same circular shape as the other toolbar controls.
+        button.hoverStyle = UIHoverStyle(effect: .highlight, shape: .circle)
+        #endif
         button.isAccessibilityElement = true
         button.accessibilityTraits = .button
         update(button, context: context)
