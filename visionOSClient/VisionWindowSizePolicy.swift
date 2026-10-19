@@ -33,6 +33,16 @@ enum VisionWindowSizePolicy {
             && actual.height - source.height * scale <= 1
     }
 
+    static func restoredSize(_ remembered: CGSize, source: CGSize) -> CGSize? {
+        guard let geometry = geometry(source: source), remembered.width.isFinite, remembered.height.isFinite,
+              remembered.width > 0, remembered.height > 0 else { return nil }
+        let wanted = min(remembered.width / source.width, remembered.height / source.height)
+        let lower = geometry.minimum.width / source.width
+        let upper = geometry.maximum.width / source.width
+        let scale = min(upper, max(lower, wanted))
+        return CGSize(width: source.width * scale, height: source.height * scale)
+    }
+
     static func geometry(source: CGSize) -> WindowGeometry? {
         guard source.width.isFinite, source.height.isFinite,
               source.width > 0, source.height > 0 else { return nil }

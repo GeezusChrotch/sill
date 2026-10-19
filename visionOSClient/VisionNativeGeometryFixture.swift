@@ -4,7 +4,15 @@ import UIKit
 
 /// Native scene diagnostic: no fixed frame or LayoutHarness. Never browses or connects.
 struct VisionNativeGeometryFixture: View {
-    @StateObject private var client = MockCatalog.client(active: .none)
+    @StateObject private var client: StreamClient = {
+        let client = MockCatalog.client(active: .none)
+        if ProcessInfo.processInfo.arguments.contains("-SillNativeRestore1") {
+            client.spatialPreservesRestoredSize = true
+            client.spatialRestoredSize = CGSize(width: 2400, height: 1350)
+            client.connected = false
+        }
+        return client
+    }()
     @State private var source = CGSize(width: 1440, height: 900)
     var body: some View {
         GeometryReader { proxy in
@@ -15,22 +23,40 @@ struct VisionNativeGeometryFixture: View {
             }
             .onChange(of: proxy.size, initial: true) { _, size in
                 print("NATIVE_GEOMETRY content=\(size) source=\(source)")
+                client.noteSpatialPresentationSize(size, source: client.active, session: client.connectedAt)
             }
         }
-        .background(VisionWindowGeometry(client: client).frame(width: 1, height: 1))
+        .background(VisionWindowGeometry(client: client, hasRestoredWorkspace: ProcessInfo.processInfo.arguments.contains("-SillNativeRestore1")).frame(width: 1, height: 1))
         .background {
             if ProcessInfo.processInfo.arguments.contains("-SillNativeLargeResize1") {
                 VisionNativeLargeResizeProbe().frame(width: 1, height: 1)
             }
         }
         .task {
-            try? await Task.sleep(for: .seconds(2))
+            if ProcessInfo.processInfo.arguments.contains("-SillNativeRestore1") {
+                client.spatialPreservesRestoredSize = true
+                client.spatialRestoredSize = CGSize(width: 2400, height: 1350)
+                client.connected = false
+                client.active = .none
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                client.connected = true
+                client.connectedAt = Date()
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                source = CGSize(width: 3840, height: 2160)
+                client.active = .desktop
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                client.setNativeGeometryFixtureDesktopSize(source)
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                print("NATIVE_GEOMETRY restoration fixture completed saved=2400x1350")
+                return
+            }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
             client.active = .window(102)
-            try? await Task.sleep(for: .seconds(4))
+            do { try await Task.sleep(for: .seconds(4)) } catch { return }
             source = CGSize(width: 3840, height: 2160)
             client.active = .desktop
             client.setNativeGeometryFixtureDesktopSize(source)
-            try? await Task.sleep(for: .seconds(5))
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
             print("NATIVE_GEOMETRY fixture completed")
         }
     }

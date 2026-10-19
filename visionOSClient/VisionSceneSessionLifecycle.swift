@@ -4,7 +4,7 @@ import ObjectiveC
 /// The scene owns this sentinel independently of SwiftUI's representable lifetime. Closing a
 /// window can dismantle its view before UIKit broadcasts didDisconnect; that must still stop the
 /// owning stream. The scene reference is weak; the client is retained only until deterministic
-/// disconnect cleanup completes, then remembered weakly for manual reactivation. No sibling is inspected.
+/// disconnect cleanup completes, then remembered weakly for paired workspace reactivation. No sibling is inspected.
 final class VisionSceneSessionLifecycle {
     private static var associationKey: UInt8 = 0
     private weak var scene: UIWindowScene?
@@ -17,7 +17,7 @@ final class VisionSceneSessionLifecycle {
         if let existing = objc_getAssociatedObject(scene, &associationKey) as? VisionSceneSessionLifecycle {
             if existing.stopped {
                 existing.stoppedClient = client
-                if scene.activationState == .foregroundActive { existing.resumeForManualConnection() }
+                if scene.activationState == .foregroundActive { existing.resumeForRestoration() }
                 return
             }
             if existing.client !== client {
@@ -57,16 +57,15 @@ final class VisionSceneSessionLifecycle {
         observer = NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let current = self.scene, let activated = note.object as? UIWindowScene,
                   activated === current, self.stopped else { return }
-            self.resumeForManualConnection()
+            self.resumeForRestoration()
         }
     }
 
-    private func resumeForManualConnection() {
+    private func resumeForRestoration() {
         stopped = false
         client = stoppedClient
         stoppedClient = nil
-        client?.startBrowsing()
-        client?.status = "Choose a Mac to reconnect this Sill window."
+        client?.resumeSpatialWorkspace()
         observeDisconnect()
     }
 }

@@ -20,6 +20,11 @@ final class Client {
     var windows: [WindowInfo] = []
     var resumeSource: StreamSource?
     var pendingAppSelection: (windowID: UInt32?, bundleID: String?, expires: Date)?
+    var spatialWorkspaceClearGeneration = 0
+    var pendingSpatialWorkspace: Int?
+    var pendingSpatialWorkspaceSource: StreamSource?
+    var spatialPreservesRestoredSize = false
+    var spatialRestoredSize: CGSize?
     var pendingSpatialSource: StreamSource?
     var pendingSpatialSourceSize: CGSize?
     var pendingSpatialSourceTimeout: DispatchWorkItem?

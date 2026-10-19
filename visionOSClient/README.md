@@ -102,6 +102,31 @@ helpers remain compiled but are not referenced by the active root. They are
 retained to keep this handoff focused and preserve their existing pure checks;
 they do not describe the active UI or establish its behavior.
 
+## Workspace restoration (0.28.0 / 28)
+
+visionOS restores the open scene set and spatial placement through its public scene
+restoration support. Each scene saves its paired Mac reference, selected Mac window
+identity or Desktop, native presentation size, Touch/Mouse mode, text scale and toolbar
+Auto/Lock preference. Restoration uses the existing paired-host reconnect policy; a
+revoked, missing or changed pairing requires a manual connection. It saves no connection
+seed, credentials, host addresses, raw document titles or keyboard eligibility.
+Keyboard always starts off and still requires the existing deliberate input action.
+
+Window IDs are ephemeral: restore reconciles the confirmed host catalog using app bundle
+and a hashed title. A partial catalog gets up to three seconds; a unique same-app window
+can then survive a changed title, otherwise Desktop is selected. Selection must be
+acknowledged within ten seconds. No apps are launched to recreate missing windows.
+Explicit Disconnect or Forget clears that scene's restore intent. Scene disconnection
+preserves a descriptor for possible system reactivation; only visionOS decides which
+closed scenes are reopened, so no application replay loop can duplicate them.
+
+The geometry bridge preserves a restored scene during reconnect and fits the confirmed
+source into its remembered native size. Actual size and exact spatial placement remain
+system preferences, and headset validation is still needed for force-quit/relaunch,
+multiple restored windows and user resizing. The app does not recreate arbitrary 3D
+coordinates. Auto toolbars require a 0.65-second glance before revealing; their glance
+pill uses the same delay.
+
 ## Validation and remaining device checks
 
 From the repository root:

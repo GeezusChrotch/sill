@@ -258,6 +258,101 @@ final class StreamClient: ObservableObject {
     private var pendingSpatialSourceTimeoutID: UUID?
     private var spatialSeedStarted = false
     private var suppressSpatialAutoDesktop = false
+    private var pendingSpatialWorkspace: VisionWorkspace?
+    private var pendingSpatialWorkspaceSource: StreamSource?
+    private var spatialPresentationSession: Date?
+    private var suspendedRequiresSpatialCapability = false
+    private var suspendedSpatialWorkspace: VisionWorkspace?
+    @Published private(set) var spatialWorkspaceClearGeneration = 0
+    @Published private(set) var spatialPresentationSize: CGSize?
+    private var spatialPresentationSource: StreamSource?
+    var spatialPreservesRestoredSize = false
+    var spatialRestoredSize: CGSize?
+
+    var spatialWorkspaceSnapshot: VisionWorkspace? {
+        guard connected, pendingSpatialWorkspace == nil, let id = session?.macID,
+              let mac = savedMac(id), mac.revoked != true, mac.newKey != true else { return nil }
+        let target: VisionWorkspace.Window?
+        switch active {
+        case .none: return nil
+        case .desktop: target = nil
+        case .window(let id):
+            guard let info = windows.first(where: { $0.id == id }), !info.bundleID.isEmpty else { return nil }
+            target = VisionWorkspace.Window(info)
+        }
+        let size = spatialPresentationSource == active && spatialPresentationSession == connectedAt
+            ? spatialPresentationSize : (spatialPreservesRestoredSize ? spatialRestoredSize : nil)
+        return VisionWorkspace(macID: id, window: target, width: size.map { Double($0.width) }, height: size.map { Double($0.height) })
+    }
+
+    func noteSpatialPresentationSize(_ size: CGSize, source: StreamSource, session started: Date?, confirmed: Bool = false) {
+        guard connected, started != nil, started == connectedAt, active == source else { return }
+        if !confirmed {
+            guard spatialPresentationSession == started, spatialPresentationSource == source else { return }
+        }
+        let changedSource = spatialPresentationSource != source
+        spatialPresentationSession = started
+        spatialPresentationSource = source
+        if spatialPresentationSize != size || changedSource {
+            spatialPresentationSize = size
+            #if DEBUG
+            print("WORKSPACE_SIZE width=\(Int(size.width)) height=\(Int(size.height))")
+            #endif
+        }
+    }
+
+    /// Only existing admitted pairings may reconnect. No DEBUG launch-pairing arguments,
+    /// identity creation or name-only discovery fallback is run by restoration.
+    func restoreSpatialWorkspace(_ workspace: VisionWorkspace, independent: Bool) {
+        guard !connected, connection == nil, remoteDial == nil else { return }
+        requiresSpatialCapability = independent
+        guard DeviceIdentity.existing() != nil, let mac = savedMac(workspace.macID),
+              mac.revoked != true, mac.newKey != true, mac.fingerprintData != nil else {
+            startBrowsing()
+            status = "Pair this Mac again to restore this Sill window."
+            return
+        }
+        pendingSpatialWorkspace = workspace
+        spatialPreservesRestoredSize = true
+        spatialRestoredSize = workspace.size
+        reconnect = Reconnect(macID: mac.macID, bonjourName: nil, name: displayName(mac.macID),
+                              lostAt: ProcessInfo.processInfo.systemUptime, pathAtLoss: pathSignature,
+                              remoteAllowed: true, rememberedDirect: false)
+        status = "Restoring this Sill window…"
+        startBrowsing()
+        reconnectIfListed()
+    }
+
+    private func requestSpatialWorkspaceSource(_ source: StreamSource, workspace: VisionWorkspace, from: NWConnection) {
+        cancelSpatialSourceTimeout()
+        pendingSpatialWorkspaceSource = source
+        request(source)
+        let timeoutID = UUID()
+        pendingSpatialSourceTimeoutID = timeoutID
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.connection === from, self.pendingSpatialWorkspace == workspace,
+                  self.pendingSpatialWorkspaceSource == source, self.pendingSpatialSourceTimeoutID == timeoutID else { return }
+            self.disconnect(preservingWorkspace: true)
+            self.status = "Couldn’t restore the selected source. Choose a Mac to reconnect."
+        }
+        pendingSpatialSourceTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+    }
+
+    func cancelSpatialRestoreForForgottenMac(_ id: String) {
+        let restoring = pendingSpatialWorkspace?.macID == id
+        guard restoring || suspendedSpatialWorkspace?.macID == id || spatialWorkspaceSnapshot?.macID == id else { return }
+        spatialWorkspaceClearGeneration += 1
+        suspendedSpatialWorkspace = nil
+        if restoring { disconnect() }
+    }
+
+    func resumeSpatialWorkspace() {
+        let workspace = suspendedSpatialWorkspace
+        suspendedSpatialWorkspace = nil
+        if let workspace { restoreSpatialWorkspace(workspace, independent: suspendedRequiresSpatialCapability) }
+        else { startBrowsing(); status = "Choose a Mac to reconnect this Sill window." }
+    }
 
     func spatialWindowSeed(source: StreamSource) -> VisionWindowSeed? {
         guard connected, supportsSpatialWindows, let session, DeviceIdentity.existing() != nil else { return nil }
@@ -320,6 +415,10 @@ final class StreamClient: ObservableObject {
 
     func clearSpatialPendingSelectionForManualConnect() {
         cancelSpatialSourceTimeout()
+        pendingSpatialWorkspace = nil
+        pendingSpatialWorkspaceSource = nil
+        spatialPreservesRestoredSize = false
+        spatialRestoredSize = nil
         pendingSpatialSource = nil
         pendingSpatialSourceSize = nil
         spatialPreferredSourceSize = nil
@@ -329,11 +428,13 @@ final class StreamClient: ObservableObject {
     /// Scene closure cancels only this client's work. A backgrounded sibling scene keeps its own
     /// stream, browser, reporter and identity; no process-wide cancellation is used here.
     func stopSpatialWindow() {
+        suspendedSpatialWorkspace = spatialWorkspaceSnapshot ?? pendingSpatialWorkspace
+        suspendedRequiresSpatialCapability = requiresSpatialCapability
         cancelPendingLink()
         cancelPairing()
         cancelHomeAsk()
         endOverlayAsk(withdraw: true)
-        disconnect()
+        disconnect(preservingWorkspace: true)
         browsing = false
         discoveryRecheck?.cancel(); discoveryRecheck = nil
         networkLife.rebuildWork?.cancel(); networkLife.settleWork?.cancel()
@@ -526,7 +627,8 @@ final class StreamClient: ObservableObject {
             #if os(visionOS)
             if oldValue != connectedAt {
                 cancelRemoteKeyboardRequest()
-                visionMouseMode = false
+                // The scene restores pointer mode separately; keyboard eligibility is still reset.
+                // Retain this preference through teardown so removal cannot save a transient false.
             }
             #endif
         }
@@ -3347,8 +3449,12 @@ final class StreamClient: ObservableObject {
     }
 
     /// The user chose to leave. No reconnect.
-    func disconnect() {
+    func disconnect(preservingWorkspace: Bool = false) {
         #if os(visionOS)
+        if !preservingWorkspace {
+            spatialWorkspaceClearGeneration += 1
+            suspendedSpatialWorkspace = nil
+        }
         clearSpatialPendingSelectionForManualConnect()
         #endif
         reconnect = nil
@@ -4133,6 +4239,11 @@ final class StreamClient: ObservableObject {
                     self.status = "Update Sill on your Mac to open independent windows."
                     return
                 }
+                if let workspace = self.pendingSpatialWorkspace, self.session?.macID != workspace.macID {
+                    self.disconnect(preservingWorkspace: true)
+                    self.status = "This Mac’s pairing changed. Choose a Mac to reconnect."
+                    return
+                }
                 self.supportsSpatialWindows = independent
                 #endif
                 // A remote session, and one at home over TLS, is connected at its first window list,
@@ -4194,6 +4305,34 @@ final class StreamClient: ObservableObject {
                     self.thumbnails = self.thumbnails.filter { live.contains($0.key) }
                 }
                 #if os(visionOS)
+                if let workspace = self.pendingSpatialWorkspace {
+                    guard let from else { return }
+                    if let requested = self.pendingSpatialWorkspaceSource {
+                        guard list.active == requested else { return }
+                        self.cancelSpatialSourceTimeout()
+                        self.pendingSpatialWorkspace = nil
+                        self.pendingSpatialWorkspaceSource = nil
+                    } else if let exact = workspace.reconciledSource(in: list.windows, allowFallback: false) {
+                        self.requestSpatialWorkspaceSource(exact, workspace: workspace, from: from)
+                        return
+                    } else {
+                        // A fresh independent pipeline can publish a partial catalog. Wait a
+                        // bounded grace before using a sole-app or Desktop fallback.
+                        if self.pendingSpatialSourceTimeout == nil {
+                            let timeoutID = UUID()
+                            self.pendingSpatialSourceTimeoutID = timeoutID
+                            let timeout = DispatchWorkItem { [weak self] in
+                                guard let self, self.connection === from, self.pendingSpatialWorkspace == workspace,
+                                      self.pendingSpatialWorkspaceSource == nil,
+                                      self.pendingSpatialSourceTimeoutID == timeoutID else { return }
+                                self.requestSpatialWorkspaceSource(workspace.source(in: self.windows), workspace: workspace, from: from)
+                            }
+                            self.pendingSpatialSourceTimeout = timeout
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timeout)
+                        }
+                        return
+                    }
+                }
                 if let source = self.pendingSpatialSource {
                     if case .window(let id) = source, !list.windows.contains(where: { $0.id == id }) {
                         // A new independent host pipeline can still be reading its catalog (or

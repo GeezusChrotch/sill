@@ -8,6 +8,7 @@ struct ContentView: View {
     private let spatialSeed: VisionWindowSeed?
     private let spatialManualConnect: Bool
     @State private var spatialStartupPerformed = false
+    @SceneStorage("Sill.spatialWorkspace.v1") private var spatialWorkspace = ""
 
     init(spatialSeed: VisionWindowSeed? = nil, spatialManualConnect: Bool = false) {
         self.spatialSeed = spatialSeed
@@ -21,7 +22,25 @@ struct ContentView: View {
     var body: some View {
         root.onAppear { statsReporter.attach(to: client) }
         #if os(visionOS)
-            .background(VisionWindowGeometry(client: client).frame(width: 1, height: 1).accessibilityHidden(true))
+            .background(VisionWindowGeometry(client: client, hasRestoredWorkspace: VisionWorkspace.decode(spatialWorkspace) != nil).frame(width: 1, height: 1).accessibilityHidden(true))
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.onChange(of: geometry.size, initial: true) { _, size in
+                        client.noteSpatialPresentationSize(size, source: client.active, session: client.connectedAt)
+                    }
+                }
+            }
+            .onChange(of: client.active) { _, _ in saveSpatialWorkspace() }
+            .onChange(of: client.windows) { _, _ in saveSpatialWorkspace() }
+            .onChange(of: client.savedMacs) { _, saved in
+                if let workspace = VisionWorkspace.decode(spatialWorkspace),
+                   !saved.contains(where: { $0.macID == workspace.macID && $0.revoked != true && $0.newKey != true }) {
+                    spatialWorkspace = ""
+                }
+            }
+            .onChange(of: client.connected) { _, _ in saveSpatialWorkspace() }
+            .onChange(of: client.spatialPresentationSize) { _, _ in saveSpatialWorkspace() }
+            .onChange(of: client.spatialWorkspaceClearGeneration) { _, _ in spatialWorkspace = "" }
         #endif
     }
 
@@ -69,6 +88,10 @@ struct ContentView: View {
                 return
             }
             spatialStartupPerformed = true
+            if spatialSeed == nil, let workspace = VisionWorkspace.decode(spatialWorkspace) {
+                client.restoreSpatialWorkspace(workspace, independent: spatialManualConnect)
+                return
+            }
             if spatialManualConnect {
                 client.prepareSpatialWindowForManualConnection()
                 client.startBrowsing()
@@ -90,6 +113,15 @@ struct ContentView: View {
         // sill://pair from the Camera, Messages or `xcrun simctl openurl`: a confirmation first.
         .onOpenURL { client.handleOpenURL($0) }
     }
+
+    #if os(visionOS)
+    private func saveSpatialWorkspace() {
+        if let workspace = client.spatialWorkspaceSnapshot {
+            let encoded = workspace.encoded
+            if encoded != spatialWorkspace { spatialWorkspace = encoded }
+        }
+    }
+    #endif
 
     #if DEBUG
     /// `-SillOrientation landscape|portrait`: the normal app asks its window scene for that

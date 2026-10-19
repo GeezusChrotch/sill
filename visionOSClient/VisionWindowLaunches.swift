@@ -3,7 +3,8 @@ import SwiftUI
 import StreamProtocol
 
 /// Scene values contain an opaque random ID only. Trusted connection seeds stay in memory and
-/// expire if the system never opens the requested scene. Restored scenes fall back to Connect.
+/// expire if the system never opens the requested scene. Restored scenes resolve their paired
+/// Mac/source descriptor from SceneStorage, never from a persisted connection seed.
 @MainActor
 final class VisionWindowLaunches {
     static let shared = VisionWindowLaunches()

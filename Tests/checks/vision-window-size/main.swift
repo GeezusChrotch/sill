@@ -76,3 +76,12 @@ expect(VisionWindowSizePolicy.matchesAspect(CGSize(width: 1400, height: 788), so
 expect(!VisionWindowSizePolicy.matchesAspect(.zero, source: CGSize(width: 3840, height: 2160)), "Detached window cannot confirm geometry")
 
 print("vision-window-size: source scaling, invalid dimensions and observed native aspect checks passed")
+
+let remembered = CGSize(width: 2400, height: 1350)
+expect(VisionWindowSizePolicy.restoredSize(remembered, source: CGSize(width: 1920, height: 1080)) == remembered,
+       "Restore must keep deliberate large native scene size")
+let fitted = VisionWindowSizePolicy.restoredSize(remembered, source: CGSize(width: 600, height: 1200))!
+expect(sameRatio(fitted, CGSize(width: 600, height: 1200)) && fitted.height == 1350,
+       "Changed source fits remembered size with its own ratio")
+expect(VisionWindowSizePolicy.restoredSize(.zero, source: CGSize(width: 600, height: 1200)) == nil,
+       "Invalid remembered dimensions cannot resize a scene")

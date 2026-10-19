@@ -4,6 +4,9 @@ import SwiftUI
 struct SillVisionApp: App {
     private var initialSize: CGSize {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-SillNativeRestore1") {
+            return CGSize(width: 2400, height: 1350)
+        }
         if let spec = LayoutHarness.Spec.fromLaunchArguments { return spec.size }
         #endif
         return VisionWindowSizePolicy.login

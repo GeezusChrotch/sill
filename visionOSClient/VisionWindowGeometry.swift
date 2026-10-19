@@ -6,6 +6,7 @@ import StreamProtocol
 /// It never enumerates UIApplication windows or applies changes to a sibling scene.
 struct VisionWindowGeometry: UIViewRepresentable {
     @ObservedObject var client: StreamClient
+    var hasRestoredWorkspace = false
 
     func makeUIView(context: Context) -> VisionWindowGeometryView {
         VisionWindowGeometryView()
@@ -16,7 +17,7 @@ struct VisionWindowGeometry: UIViewRepresentable {
         // Exact-size mock/live harness frames are visual test fixtures, not scene-size requests.
         if LayoutHarness.Spec.fromLaunchArguments != nil { return }
         #endif
-        view.update(client: client)
+        view.update(client: client, hasRestoredWorkspace: hasRestoredWorkspace)
     }
 
     static func dismantleUIView(_ view: VisionWindowGeometryView, coordinator: ()) {
@@ -40,6 +41,7 @@ final class VisionWindowGeometryView: UIView {
     private var requestGeneration = UUID()
     private var requestFailed = false
     private var disconnected = false
+    private var hasRestoredWorkspace = false
     private var observers: [NSObjectProtocol] = []
 
     override init(frame: CGRect) {
@@ -97,10 +99,25 @@ final class VisionWindowGeometryView: UIView {
         applySize()
     }
 
-    func update(client: StreamClient) {
+    func update(client: StreamClient, hasRestoredWorkspace: Bool = false) {
+        self.hasRestoredWorkspace = hasRestoredWorkspace
         self.client = client
         if let scene = owningScene { VisionSceneSessionLifecycle.attach(client: client, to: scene) }
         applySize()
+    }
+
+    private func recordPresentationSize() {
+        guard let client, client.connected, let applied, isCurrentSourceToken(applied),
+              let size = window?.bounds.size, let source = diagnosticSourceSize,
+              VisionWindowSizePolicy.matchesAspect(size, source: source) else { return }
+        let active = client.active
+        let started = client.connectedAt
+        let generation = requestGeneration
+        DispatchQueue.main.async { [weak self, weak client] in
+            guard let self, self.requestGeneration == generation, self.applied == applied,
+                  self.isCurrentSourceToken(applied) else { return }
+            client?.noteSpatialPresentationSize(size, source: active, session: started, confirmed: true)
+        }
     }
 
     private func applySize() {
@@ -108,6 +125,8 @@ final class VisionWindowGeometryView: UIView {
         let token: Token
         let desired: CGSize
         if !client.connected {
+            // A restored scene already has system-owned geometry. Do not collapse it to login.
+            if hasRestoredWorkspace || client.spatialPreservesRestoredSize { return }
             token = .login
             diagnosticSourceSize = nil
             desired = VisionWindowSizePolicy.login
@@ -141,9 +160,14 @@ final class VisionWindowGeometryView: UIView {
                 request(nil, in: scene) // Waiting for a selection must not retain a previous lock.
                 return
             }
-            guard let geometry = VisionWindowSizePolicy.geometry(source: source) else {
+            guard var geometry = VisionWindowSizePolicy.geometry(source: source) else {
                 releaseWhileWaiting(token, in: scene)
                 return
+            }
+            if client.spatialPreservesRestoredSize,
+               let restored = client.spatialRestoredSize ?? window?.bounds.size,
+               let preferred = VisionWindowSizePolicy.restoredSize(restored, source: source) {
+                geometry = .init(preferred: preferred, minimum: geometry.minimum, maximum: geometry.maximum)
             }
             waitingForDimensions = nil
             diagnosticSourceSize = source
@@ -234,6 +258,7 @@ final class VisionWindowGeometryView: UIView {
                     } else if locking {
                         if matches && restriction == .uniform {
                             self.applied = token
+                            self.recordPresentationSize()
                             self.record(phase: 4, source: geometry.preferred)
                             #if DEBUG
                             print("NATIVE_GEOMETRY applied=\(actual) source=\(geometry.preferred) restriction=uniform")
@@ -270,7 +295,8 @@ final class VisionWindowGeometryView: UIView {
         #endif
         scene.requestGeometryUpdate(.Vision(size: requested,
                                              minimumSize: geometry?.minimum ?? VisionWindowSizePolicy.minimum,
-                                             maximumSize: geometry?.maximum ?? VisionWindowSizePolicy.openingMaximum,
+                                             maximumSize: geometry?.maximum ?? ((hasRestoredWorkspace || client?.spatialPreservesRestoredSize == true)
+                                                 ? VisionWindowSizePolicy.streamMaximum : VisionWindowSizePolicy.openingMaximum),
                                              resizingRestrictions: locked ? .uniform : .freeform)) { [weak self, weak scene] error in
             guard let self, let scene, self.owningScene === scene else { return }
             if let generation {

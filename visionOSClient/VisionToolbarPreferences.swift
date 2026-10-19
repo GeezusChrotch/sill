@@ -11,7 +11,7 @@ struct VisionToolbarReveal: ViewModifier {
             // Keep the bar's compositor fade separate from its visible glance target.
             .contentShape(.hoverEffect, Rectangle())
             .hoverEffect(in: group) { effect, active, _ in
-                effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
+                effect.animation(.easeInOut(duration: reduceMotion ? 0 : 0.18).delay(active ? 0.65 : 1.0)) {
                     $0.opacity(!automatic || active ? 1 : 0)
                 }
             }
@@ -35,7 +35,7 @@ struct VisionToolbarGlanceTarget: View {
             .contentShape(.hoverEffect, Capsule())
             .hoverEffect(.highlight, in: group)
             .hoverEffect(in: group) { effect, active, _ in
-                effect.animation(reduceMotion ? nil : .easeInOut(duration: 0.18).delay(active ? 0.35 : 1.0)) {
+                effect.animation(.easeInOut(duration: reduceMotion ? 0 : 0.18).delay(active ? 0.65 : 1.0)) {
                     $0.opacity(active ? 0 : 1)
                 }
             }

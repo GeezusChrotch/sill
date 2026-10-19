@@ -104,6 +104,8 @@ struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     #if os(visionOS)
     @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
+    @SceneStorage("Sill.spatialMouseMode") private var spatialSavedMouseMode = false
+    @SceneStorage("Sill.spatialTextScale") private var spatialSavedTextScale = 0.0
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
     @Namespace private var spatialToolbarHoverNamespace
@@ -393,6 +395,10 @@ struct StreamScreen: View {
         .onChange(of: windowMenu) { _, menu in if menu != nil { setSettings(false) } }
         .ignoresSafeArea(edges: .bottom)
         .onAppear {
+            #if os(visionOS)
+            client.visionMouseMode = spatialSavedMouseMode
+            textScale = spatialSavedTextScale.isFinite && spatialSavedTextScale > 0 && spatialSavedTextScale <= 8 ? spatialSavedTextScale : nil
+            #endif
             // A fresh connection starts on the Desktop (the client asks for it as soon as the host
             // reports nothing streaming), so the drawer stays closed until the user opens it.
             sendViewport()
@@ -435,7 +441,15 @@ struct StreamScreen: View {
         // Rotation animates, and a Mac window resize restarts the stream, so let the size settle.
         .onChange(of: panelSize) { _, _ in sendViewport(after: 0.25) }
         // Same wait for Aa: cycling from Off to 0.8× passes three sizes nobody wants the Mac to try.
-        .onChange(of: textScale) { _, _ in sendViewport(after: 0.25) }
+        .onChange(of: textScale) { _, value in
+            #if os(visionOS)
+            spatialSavedTextScale = value ?? 0
+            #endif
+            sendViewport(after: 0.25)
+        }
+        #if os(visionOS)
+        .onChange(of: client.visionMouseMode) { _, value in spatialSavedMouseMode = value }
+        #endif
         // The stream rate follows the panel (`StreamClient.wantedFPS`): re-send when Low Power Mode
         // toggles or the screen's mode changes. Both notifications can arrive off the main thread.
         .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange).receive(on: RunLoop.main)) { _ in
