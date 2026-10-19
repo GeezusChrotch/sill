@@ -47,6 +47,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// type. The Pencil's position is kept, from `.pencil`, and drawn only with Q2's flip
     /// (`PointerPresence.pencilShowsPointer`), in any layout, as a Pencil here is a mouse.
     var setOwnPointer: (CGPoint?, PointerPresence.Origin) -> Void = { _, _ in }
+    var setNativePointerActive: (Bool) -> Void = { _ in }
 
     /// Pan translation already turned into scroll, so each callback sends only the new delta.
     private var lastPanTranslation: CGPoint = .zero
@@ -147,6 +148,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         spatialGate.allowed = false
         defer { spatialGate.allowed = wasAllowed }
         momentum.stop()
+        setNativePointerActive(false)
         setOwnPointer(nil, .none)
         releaseForwardedKeys()
         if let button = spatialButton {
@@ -212,6 +214,12 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
         // Pencil hover on the iPads that support it, and the trackpad/mouse pointer everywhere.
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(handleHover))
+        #if os(visionOS)
+        // Finger hover is also public on visionOS. Filter by UIKit device type as well as
+        // UIEvent.hover below; a buttonless indirectPointer pinch is a touch event.
+        hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+        hover.delegate = self
+        #endif
         addGestureRecognizer(hover)
         self.hover = hover
 
@@ -346,6 +354,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
                   allowed: spatialGate.allowed, attached: window != nil,
                   foreground: UIApplication.shared.applicationState == .active),
               let point else { return }
+        setNativePointerActive(false)
         setOwnPointer(point, .spatial)
     }
     #endif
@@ -593,6 +602,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive event: UIEvent) -> Bool {
         // Gaze/pinch can be buttonless indirectPointer. Real mouse/trackpad button events use the
         // raw pointer route; accepting those here as well would send duplicate clicks.
+        if gestureRecognizer === hover { return event.type == .hover }
         if gestureRecognizer === trackpadScroll || gestureRecognizer === wheelScroll { return true }
         #if DEBUG
         if event.type == .touches {
@@ -605,7 +615,10 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     #endif
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        !(gestureRecognizer === trackpadScroll || gestureRecognizer === wheelScroll)
+        #if os(visionOS)
+        if gestureRecognizer === hover { return touch.type == .indirectPointer }
+        #endif
+        return !(gestureRecognizer === trackpadScroll || gestureRecognizer === wheelScroll)
     }
 
     /// The pointer's scrolls and its hover run together: the pointer rests over the picture while two
@@ -866,26 +879,30 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     /// both), which is how the two are told apart here.
     @objc private func handleHover(_ gesture: UIHoverGestureRecognizer) {
         #if os(visionOS)
-        // UIKit does not identify a buttonless hover as physical mouse versus spatial gaze.
-        // Mouse mode must never relocate its relative anchor from this ambiguous path.
-        if mouseMode { return }
-        #endif
+        // Only the dedicated indirectPointer + UIEvent.hover recognizer reaches this path.
+        // Native gaze effects and direct finger hover never move the relative hand anchor.
+        switch gesture.state {
+        case .began, .changed:
+            setNativePointerActive(true)
+            setOwnPointer(nil, .none)
+            guard sendPointer(.move, at: gesture.location(in: self), clamped: false) != nil else {
+                setNativePointerActive(false)
+                return
+            }
+        case .ended, .cancelled, .failed:
+            setNativePointerActive(false)
+        default: break
+        }
+        #else
         switch gesture.state {
         case .began, .changed:
             if gesture.state == .began { hoverIsPencil = false }
             if gesture.zOffset > 0 || gesture.altitudeAngle > 0 { hoverIsPencil = true }
             let at = sendPointer(.move, at: gesture.location(in: self), clamped: true)
-            #if os(visionOS)
-            if hoverIsPencil { setOwnPointer(at, .pencil) } else { showSpatialPointer(at) }
-            #else
             if hoverIsPencil { setOwnPointer(at, .pencil) } else { setOwnPointer(nil, .none) }
-            #endif
-        default:
-            #if os(visionOS)
-            if !hoverIsPencil { setOwnPointer(nil, .none) }
-            #endif
-            hoverIsPencil = false
+        default: hoverIsPencil = false
         }
+        #endif
     }
 
     // MARK: - Pencil
@@ -912,7 +929,8 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         if touch.type == .pencil { setOwnPointer(at, .pencil) }
         else {
             #if os(visionOS)
-            showSpatialPointer(at)
+            setOwnPointer(nil, .none)
+            setNativePointerActive(true)
             #else
             setOwnPointer(nil, .none)
             #endif
@@ -945,7 +963,16 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         }
         activePointerTouch = touch
         let point = touch.location(in: self)
-        guard let at = sendPointer(.move, at: point, clamped: false) else { return }
+        #if os(visionOS)
+        if touch.type == .indirectPointer {
+            setNativePointerActive(true)
+            setOwnPointer(nil, .none)
+        }
+        #endif
+        guard let at = sendPointer(.move, at: point, clamped: false) else {
+            setNativePointerActive(false)
+            return
+        }
         ownPointer(at, for: touch)
         // A trackpad's secondary click (two fingers, or right button) is a right click on the Mac.
         pointerButtonIsSecondary = touch.type == .indirectPointer && (event?.buttonMask.contains(.secondary) ?? false)
@@ -1548,6 +1575,7 @@ struct InputOverlay: UIViewRepresentable {
     let send: (InputEvent) -> Void
     /// `StreamClient.setOwnPointer`; see `InputOverlayView.setOwnPointer`.
     let setOwnPointer: (CGPoint?, PointerPresence.Origin) -> Void
+    var setNativePointerActive: (Bool) -> Void = { _ in }
     var pointerFeed: () -> PointerFeedState = { PointerFeedState() }
     var cancelRemoteKeyboardRequest: () -> Void = {}
     let proxy: InputOverlayProxy
@@ -1585,6 +1613,7 @@ struct InputOverlay: UIViewRepresentable {
         #endif
         uiView.videoSize = videoSize
         uiView.setOwnPointer = setOwnPointer
+        uiView.setNativePointerActive = setNativePointerActive
         uiView.latchedModifiers = latchedModifiers
         #if os(visionOS)
         let gestureDestination = sendGesture

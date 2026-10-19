@@ -125,6 +125,36 @@ var inactiveFull = legacyFour
 let pendingVisible = VisionSceneSet.Entry(windowID: UUID(), sessionID: "new-inactive", workspace: primary.workspace)
 expect(!inactiveFull.upsert(pendingVisible), "Full fallback cap may defer inactive new descriptor")
 expect(inactiveFull.upsert(pendingVisible, admitVisible: true, protecting: [pendingVisible.key]), "Retained pending descriptor is admitted on actual native activation")
+// Explicit window management resolves ambiguous native background-only close delivery.
+var managed = set
+managed.setRestoring(secondaryID, enabled: false)
+expect(managed.members == [primary.key] && managed.entry(secondaryID) != nil,
+       "removing stale restore member keeps descriptor and valid primary")
+managed.upsert(secondary, admitVisible: true)
+expect(!managed.members.contains(secondary.key), "late active/save callback cannot re-enrol explicit close")
+var decodedManaged = VisionSceneSet.decode(managed.encoded)
+expect(decodedManaged == managed, "explicit exclusion persists across process relaunch")
+decodedManaged.upsert(rebound, admitVisible: true)
+expect(!decodedManaged.members.contains(secondary.key), "native rebind remains excluded until explicit inclusion")
+var managedReplay = VisionSceneReplay(); _ = managedReplay.start()
+expect(!managedReplay.claim(secondary, in: managed, bound: [primary.key]), "excluded scene cannot be replayed")
+managed.retireHandles([primary.sessionID, secondary.sessionID])
+expect(managed.members == [primary.key] && managed.excluded == [secondary.key],
+       "delayed whole-set handle retirement preserves explicit membership choice")
+managed.upsert(secondary, admitVisible: true)
+expect(!managed.members.contains(secondary.key), "late save after whole-set closure still cannot resurrect exclusion")
+managed.setRestoring(secondaryID, enabled: true)
+expect(managed.members.contains(secondary.key) && managed.excluded.isEmpty,
+       "user can explicitly restore an excluded descriptor")
+managed.setRestoring(secondaryID, enabled: false)
+_ = managed.discard([secondary.sessionID])
+expect(managed.entry(secondaryID) == nil && managed.excluded.isEmpty && managed.members == [primary.key],
+       "definite individual discard removes excluded descriptor without touching valid sibling")
+var priorVersionObject = try! JSONSerialization.jsonObject(with: Data(set.encoded.utf8)) as! [String: Any]
+priorVersionObject["excluded"] = nil
+let priorVersionText = String(data: try! JSONSerialization.data(withJSONObject: priorVersionObject), encoding: .utf8)!
+expect(VisionSceneSet.decode(priorVersionText).members == set.members,
+       "build30 two-window membership survives migration with no exclusions field")
 for episode in 0..<1000 {
     var trial = VisionSceneReplay(); _ = trial.start()
     let active = episode.isMultiple(of: 2) ? Set(["primary"]) : Set<String>()

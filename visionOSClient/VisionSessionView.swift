@@ -9,6 +9,7 @@ struct VisionSessionView: View {
     let isSecondary: Bool
     @State private var seed: VisionWindowSeed?
     @State private var ready = false
+    @State private var windowsOpen = false
     @State private var nativeSessionID: String?
     @State private var owningScene = VisionSceneReference()
     @SceneStorage("Sill.spatialWorkspace.v1") private var workspace = ""
@@ -42,6 +43,9 @@ struct VisionSessionView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, let scene = owningScene.value, scene.activationState == .foregroundActive { bind(scene) }
         }
+        .sheet(isPresented: $windowsOpen) {
+            VisionWindowManagement(windowID: windowID, nativeSessionID: nativeSessionID)
+        }
         .onChange(of: workspace) { _, _ in save() }
         .onChange(of: automatic) { _, _ in save() }
         .onChange(of: mouse) { _, _ in save() }
@@ -73,6 +77,7 @@ struct VisionSessionView: View {
     private var content: some View {
         ContentView(spatialSeed: seed, spatialManualConnect: isSecondary && seed == nil,
                     spatialWorkspace: $workspace)
+            .environment(\.spatialWindowManagement, { windowsOpen = true })
             .environment(\.spatialSceneID, windowID)
             .environment(\.spatialNativeSession, nativeSessionID)
             .environment(\.spatialScenePreferences, Binding(get: { preferences }, set: { preferences = $0 }))
@@ -110,5 +115,66 @@ struct VisionSessionView: View {
             if let id { action(id: "sill-session", value: id) }
             else { action(id: "sill-main") }
         }
+    }
+}
+
+/// Explicit membership is the fallback for native closes that only report background. Removing
+/// a restore selection does not dismiss, disconnect or erase any other currently open window.
+private struct VisionWindowManagement: View {
+    let windowID: UUID?
+    let nativeSessionID: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [VisionSceneSet.Entry] = []
+    @State private var restoring = Set<String>()
+    @State private var closeError: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Array(entries.enumerated()), id: \.element.key) { index, entry in
+                        Toggle(isOn: Binding(
+                            get: { restoring.contains(entry.key) },
+                            set: { enabled in
+                                VisionSceneSetRecovery.shared.setRestoring(entry.windowID, enabled: enabled)
+                                refresh()
+                            })) {
+                            VStack(alignment: .leading) {
+                                Text(entry.windowID == windowID ? "This Sill window" : "Sill window \(index + 1)")
+                                Text(entry.workspace.window == nil ? "Mac desktop" : "Mac window")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: { Text("Restore when Sill reopens") } footer: {
+                    Text("If a window returns after you close it with system controls, turn off its switch here. Other open windows stay open.")
+                }
+                if nativeSessionID != nil {
+                    Section {
+                        Button("Restore only this Sill window") {
+                            for entry in entries {
+                                VisionSceneSetRecovery.shared.setRestoring(entry.windowID, enabled: entry.windowID == windowID)
+                            }
+                            refresh()
+                        }
+                        Button("Close this Sill window", systemImage: "xmark.rectangle", role: .destructive) {
+                            guard let nativeSessionID else { return }
+                            VisionSceneSetRecovery.shared.close(windowID, session: nativeSessionID) { closeError = $0 }
+                            refresh()
+                        }
+                    } footer: { Text("Closes this window and removes it from automatic restoration.") }
+                }
+                if let closeError { Text(closeError).foregroundStyle(.secondary) }
+            }
+            .navigationTitle("Sill windows")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .frame(width: 520, height: 480)
+        .onAppear(perform: refresh)
+    }
+    private func refresh() {
+        let recovery = VisionSceneSetRecovery.shared
+        entries = recovery.managedEntries
+        restoring = Set(entries.filter { recovery.isRestoring($0.windowID) }.map(\.key))
     }
 }

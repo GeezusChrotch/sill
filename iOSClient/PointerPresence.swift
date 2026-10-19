@@ -54,6 +54,9 @@ struct PointerPresence: Equatable {
     var spatialStream = false
     /// Native visionOS retains the latest accepted position through typing and scrolling.
     var persistentSpatial = false
+    /// A verified local mouse/trackpad owns the system cursor over this surface.
+    /// This is independent of typing and feed echoes, which must not revive a second sprite.
+    var nativePointerActive = false
     private(set) var spatialAnchor: CGPoint?
     /// Q2: the Pencil draws no pointer, hovering or touching (the request, by its letter). True draws
     /// it again, in any layout (the harness's `-SillPencilPointer 1`).
@@ -69,9 +72,15 @@ struct PointerPresence: Equatable {
     static let pencilShowsPointerByDefault = false
     static let trackpadLingerByDefault: Double? = nil
 
+    /// Position readiness is separate from visual ownership: a hidden duplicate sprite does
+    /// not mean the relative hand pointer has lost its physical pointer's accepted anchor.
+    var hasKnownSpatialPosition: Bool {
+        streaming && (control == .elsewhere ? macInside && mac != nil : own != nil || spatialAnchor != nil)
+    }
+
     /// Where the sprite's tip goes, a fraction of the frame, or nil to hide it.
     func sprite(now: Double) -> CGPoint? {
-        guard streaming else { return nil }
+        guard streaming, !nativePointerActive else { return nil }
         if persistentSpatial {
             if control == .elsewhere { return macInside ? mac : nil }
             return own ?? spatialAnchor
@@ -123,6 +132,12 @@ struct PointerPresence: Equatable {
 
     /// Who has the pointer and where the Mac's is, as the network queue's feed has them.
     mutating func follow(_ feed: PointerFeedState) {
+        // A newly accepted host/other-device position takes ownership back. Re-rendering an
+        // unchanged feed (typing, layout or local cursor suppression) does not.
+        if feed.control == .elsewhere,
+           control != .elsewhere || mac != feed.mac || macInside != feed.macInside {
+            nativePointerActive = false
+        }
         control = feed.control
         mac = feed.mac
         macInside = feed.macInside

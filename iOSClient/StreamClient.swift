@@ -3870,13 +3870,13 @@ final class StreamClient: ObservableObject {
         presence.persistentSpatial = true
         presence.streaming = VisionSurfaceInputPolicy.showsCursor(mouseMode: visionMouseMode,
             streamReady: connected && active != .none && appInForeground && videoSize.width > 0 && videoSize.height > 0)
-        let known = presence.sprite(now: ProcessInfo.processInfo.systemUptime) != nil
+        let known = presence.hasKnownSpatialPosition
         if visionPointerKnown != known {
             // Rendering may be requested from a representable update. Publish only a readiness
             // transition on the next main turn, never pointer coordinates or per-frame updates.
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                let latest = self.presence.sprite(now: ProcessInfo.processInfo.systemUptime) != nil
+                let latest = self.presence.hasKnownSpatialPosition
                 if self.visionPointerKnown != latest { self.visionPointerKnown = latest }
             }
         }
@@ -3899,6 +3899,12 @@ final class StreamClient: ObservableObject {
     /// draws that one). Called alongside the input that goes out anyway, never instead of it. A flip
     /// between none and some still tells the host (`setLocalCursor`), as it did; the Mac's arrow
     /// never does. Main thread.
+    func setNativePointerActive(_ active: Bool) {
+        guard presence.nativePointerActive != active else { return }
+        presence.nativePointerActive = active
+        renderPointer()
+    }
+
     func setOwnPointer(_ p: CGPoint?, from origin: PointerPresence.Origin) {
         let flipped = (p == nil) != (presence.own == nil)
         presence.setOwn(p, from: origin)

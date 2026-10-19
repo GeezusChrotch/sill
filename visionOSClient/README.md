@@ -96,11 +96,9 @@ see [independent sessions](../docs/independent-sessions.md) for admission, input
 physical window fitting, and Virtual Display limitations. An older host can serve
 the primary scene, but opening or restoring an independent scene requires the new host.
 
-Earlier prototype views (`VisionAppLauncher`, `VisionHelp`, `VisionHostSettings`,
-`VisionMacMenus`/`VisionMacMenuButton`, `VisionStreamSurface`) and their input
-helpers remain compiled but are not referenced by the active root. They are
-retained to keep this handoff focused and preserve their existing pure checks;
-they do not describe the active UI or establish its behavior.
+Build 35 removes the unreachable prototype launcher, help/settings/menus, stream surface,
+keyboard capture and its pointer/momentum helpers from source and the Xcode target. The
+active shared ContentView → StreamScreen → InputOverlay path is unchanged.
 
 ## Workspace restoration (0.30.0 / 30)
 

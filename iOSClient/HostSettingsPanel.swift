@@ -38,6 +38,7 @@ struct HostSettingsPanel: View {
     @State private var olderMac = false
     #if os(visionOS)
     @State private var spatialModeDetails = false
+    @Environment(\.spatialWindowManagement) private var manageSpatialWindows
     #endif
     /// Bumped when Low Power Mode toggles, so the frame rate note is read again.
     @State private var powerState = 0
@@ -339,6 +340,11 @@ struct HostSettingsPanel: View {
             // After everything of the Mac's, whatever state its settings are in: while they load, and
             // for a Mac without them too. Both are this device's own: its gestures, then the tour.
             #if os(visionOS)
+            if let manageSpatialWindows {
+                Button("Sill windows…", systemImage: "rectangle.on.rectangle") { manageSpatialWindows() }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 14)
+            }
             DisclosureGroup("Touch and Mouse instructions", isExpanded: $spatialModeDetails) {
                 spatialModeHelp
             }

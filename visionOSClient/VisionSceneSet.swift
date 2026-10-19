@@ -20,8 +20,11 @@ struct VisionSceneSet: Codable, Equatable {
     var version = 2
     private(set) var entries: [Entry] = []
     private(set) var members: [String] = []
+    /// Explicit user exclusions survive late saves, native background-only closures and relaunch.
+    /// Descriptors remain available for native restoration and the membership editor.
+    private(set) var excluded: [String] = []
     init() {}
-    private enum CodingKeys: String, CodingKey { case version, entries, members }
+    private enum CodingKeys: String, CodingKey { case version, entries, members, excluded }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let storedVersion = try values.decode(Int.self, forKey: .version)
@@ -30,6 +33,7 @@ struct VisionSceneSet: Codable, Equatable {
         // v29 accumulated descriptors without reliable current membership. Preserve fallback
         // descriptors, but only actual observed scenes may enrol in the new restore set.
         members = storedVersion == 2 ? try values.decode([String].self, forKey: .members) : []
+        excluded = try values.decodeIfPresent([String].self, forKey: .excluded) ?? []
     }
     static let limit = 4
     static let storageKey = "Sill.spatialSceneSet.v1"
@@ -44,17 +48,30 @@ struct VisionSceneSet: Codable, Equatable {
         else if entries.count < Self.limit { entries.append(entry) }
         else if admitVisible, let obsolete = entries.firstIndex(where: { !protecting.contains($0.key) && !members.contains($0.key) }) ?? entries.firstIndex(where: { !protecting.contains($0.key) }) {
             let retiredKey = entries[obsolete].key
-            entries.remove(at: obsolete); members.removeAll { $0 == retiredKey }; entries.append(entry)
+            entries.remove(at: obsolete); members.removeAll { $0 == retiredKey }; excluded.removeAll { $0 == retiredKey }; entries.append(entry)
         } else { return false }
-        if admitVisible, !members.contains(entry.key), members.count < Self.limit { members.append(entry.key) }
+        if admitVisible, !excluded.contains(entry.key), !members.contains(entry.key), members.count < Self.limit { members.append(entry.key) }
         return true
     }
     mutating func remove(_ id: UUID?) {
         entries.removeAll { $0.key == Self.key(id) }; members.removeAll { $0 == Self.key(id) }
+        excluded.removeAll { $0 == Self.key(id) }
+    }
+    mutating func setRestoring(_ id: UUID?, enabled: Bool) {
+        let key = Self.key(id)
+        guard entries.contains(where: { $0.key == key }) else { return }
+        if enabled {
+            excluded.removeAll { $0 == key }
+            if !members.contains(key) { members.append(key) }
+        } else {
+            members.removeAll { $0 == key }
+            if !excluded.contains(key) { excluded.append(key) }
+        }
     }
     mutating func retainMacs(_ admitted: Set<String>) {
         entries.removeAll { !admitted.contains($0.workspace.macID) }
         members.removeAll { key in !entries.contains { $0.key == key } }
+        excluded.removeAll { key in !entries.contains { $0.key == key } }
     }
     var restoringEntries: [Entry] { entries.filter { members.contains($0.key) } }
     mutating func retireHandles(_ ids: Set<String>) {
@@ -74,6 +91,7 @@ struct VisionSceneSet: Codable, Equatable {
         } else {
             let retired = entries.filter { !$0.sessionID.isEmpty && sessions.contains($0.sessionID) }.map(\.key)
             entries.removeAll { retired.contains($0.key) }; members.removeAll { retired.contains($0) }
+            excluded.removeAll { retired.contains($0) }
         }
         return currentWholeSet || launchWholeSet
     }
@@ -82,6 +100,9 @@ struct VisionSceneSet: Codable, Equatable {
               let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 2,
               value.entries.count <= limit, Set(value.entries.map(\.key)).count == value.entries.count,
               value.members.count <= limit, Set(value.members).count == value.members.count,
+              value.excluded.count <= limit, Set(value.excluded).count == value.excluded.count,
+              Set(value.members).isDisjoint(with: value.excluded),
+              value.excluded.allSatisfy({ key in value.entries.contains { $0.key == key } }),
               value.members.allSatisfy({ member in value.entries.contains { $0.key == member } }),
               Set(value.entries.map(\.sessionID).filter { !$0.isEmpty }).count == value.entries.filter({ !$0.sessionID.isEmpty }).count,
               value.entries.allSatisfy({ $0.sessionID.utf8.count <= 256 && $0.preferences.isValid && VisionWorkspace.decode($0.workspace.encoded) != nil }) else { return Self() }
@@ -177,9 +198,14 @@ import UIKit
 private struct SpatialScenePreferencesKey: EnvironmentKey {
     static let defaultValue: Binding<VisionScenePreferences>? = nil
 }
+private struct SpatialWindowManagementKey: EnvironmentKey { static let defaultValue: (() -> Void)? = nil }
 private struct SpatialSceneIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
 private struct SpatialNativeSessionKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues {
+    var spatialWindowManagement: (() -> Void)? {
+        get { self[SpatialWindowManagementKey.self] }
+        set { self[SpatialWindowManagementKey.self] = newValue }
+    }
     var spatialScenePreferences: Binding<VisionScenePreferences>? {
         get { self[SpatialScenePreferencesKey.self] }
         set { self[SpatialScenePreferencesKey.self] = newValue }
@@ -310,6 +336,28 @@ final class VisionSceneSetRecovery {
         let accepted = journal.upsert(entry, admitVisible: presence.observed.contains(key), protecting: presence.foreground)
         record(accepted ? .saveAccepted : .saveDeclined, secondary: id != nil)
         persist()
+    }
+    var managedEntries: [VisionSceneSet.Entry] { journal.entries }
+    func isRestoring(_ id: UUID?) -> Bool { journal.members.contains(VisionSceneSet.key(id)) }
+    func setRestoring(_ id: UUID?, enabled: Bool) {
+        // Cancel an already queued replay before persisting the explicit membership change.
+        cancelRecovery()
+        journal.setRestoring(id, enabled: enabled)
+        persist()
+    }
+    func close(_ id: UUID?, session: String, completion: @escaping (String) -> Void) {
+        let key = VisionSceneSet.key(id)
+        guard bindings.owns(key, session: session),
+              let native = UIApplication.shared.openSessions.first(where: { $0.persistentIdentifier == session }) else {
+            completion("This window is no longer available.")
+            return
+        }
+        // Exclude BEFORE requesting native destruction; background-only lifecycle delivery and
+        // late saves cannot re-enrol a window the user explicitly chose to close.
+        setRestoring(id, enabled: false)
+        UIApplication.shared.requestSceneSessionDestruction(native, options: nil) { _ in
+            completion("Sill couldn't close this window. Its restore switch is off; you can close it with the system window controls.")
+        }
     }
     func clear(_ id: UUID?, session: String) {
         let key = VisionSceneSet.key(id)

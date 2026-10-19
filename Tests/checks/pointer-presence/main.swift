@@ -542,5 +542,31 @@ do {
     p.streaming = false
     check(p.sprite(now: 6) == nil, "disconnected or no frame hides persistent marker")
 }
+// A physical pointer click must not leave a second persistent I-beam after button release.
+do {
+    var p = PointerPresence(), f = PointerFeedState()
+    p.streaming = true; p.persistentSpatial = true
+    _ = f.sent(.pointer(pt(0.4, 0.3)), now: 0)
+    p.setOwn(pt(0.4, 0.3), from: .spatial); p.follow(f)
+    p.nativePointerActive = true
+    p.setOwn(nil, from: .none)
+    check(p.sprite(now: 1) == nil, "native pointer replaces persistent spatial sprite")
+    check(p.hasKnownSpatialPosition, "native visual ownership retains known relative hand anchor")
+    _ = f.sent(.pointer(pt(0.6, 0.3)), now: 1); p.follow(f)
+    check(p.sprite(now: 2) == nil, "buttonless native motion never leaves last click sprite")
+    _ = f.sent(.other, now: 2); p.setOwn(nil, from: .none); p.follow(f)
+    check(p.sprite(now: 3) == nil, "typing or scrolling cannot revive native pointer's spatial anchor")
+    p.follow(f)
+    check(p.nativePointerActive, "unchanged feed renders do not relinquish native ownership")
+    _ = f.report(at: pt(0.8, 0.9), seen: 99, sentOnSession: 99, movePending: false, now: 4); p.follow(f)
+    check(!p.nativePointerActive && p.sprite(now: 5) == pt(0.8, 0.9), "fresh host takeover restores remote sprite")
+    p.nativePointerActive = true
+    p.follow(f)
+    check(p.sprite(now: 6) == nil, "native reentry suppresses unchanged remote report before local send")
+    p.nativePointerActive = false
+    p.setOwn(pt(0.7, 0.8), from: .spatial)
+    _ = f.sent(.pointer(pt(0.7, 0.8)), now: 6); p.follow(f)
+    check(p.sprite(now: 7) == pt(0.7, 0.8), "relative hand input explicitly reclaims local sprite")
+}
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
