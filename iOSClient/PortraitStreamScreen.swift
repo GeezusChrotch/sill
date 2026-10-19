@@ -539,9 +539,6 @@ struct PortraitStreamScreen: View {
                          onModifiersConsumed: { latched = [] },
                          sendGesture: { client.sendGesture($0, fingers: $1) })
                 .spatialInputBoundary(client: client)
-                #if os(visionOS)
-                VisionPointerRecovery(client: client).frame(maxHeight: .infinity, alignment: .bottom)
-                #endif
         }
         .background(Palette.panel)
         .overlay(alignment: .top) { LinkLineView(text: linkLine) }

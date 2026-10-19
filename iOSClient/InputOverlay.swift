@@ -78,7 +78,8 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     fileprivate let spatialGate = SpatialInputGate()
     private var spatialContext: SpatialInputContext?
     private var focusObservers: [NSObjectProtocol] = []
-    private var spatialKeyboardRestore = VisionKeyboardRestorePolicy()
+    private var spatialKeyboardInteraction = VisionKeyboardInteractionPolicy()
+    private var spatialKeyboardRequest = false
     private var spatialBounds = CGSize.zero
     private var spatialHold = VisionSpatialHold()
     private var spatialButton: PointerAction?
@@ -106,7 +107,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
             keyboardProxy?.focusEpoch = UUID()
         }
         if spatialContext != context || (spatialGate.allowed && !allowed) {
-            spatialKeyboardRestore.cancel()
+            releaseSpatialFocus()
         }
         if spatialContext != context || spatialGate.allowed != allowed || self.videoSize != videoSize {
             spatialGate.allowed = false
@@ -115,15 +116,16 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         spatialContext = context
         spatialGate.allowed = allowed
         isUserInteractionEnabled = allowed
-        if allowed, let ticket = spatialKeyboardRestore.dequeue() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.spatialGate.allowed, self.window != nil,
-                      self.spatialKeyboardRestore.accepts(ticket) else { return }
-                self.take(automatic: ticket.automatic)
-            }
-        }
     }
-    fileprivate func cancelPendingSpatialKeyboard() { spatialKeyboardRestore.cancel() }
+    fileprivate func cancelPendingSpatialKeyboard() { spatialKeyboardInteraction.cancel() }
+    fileprivate func takeKeyboardFromEditableInteraction() {
+        guard spatialKeyboardInteraction.consume(now: ProcessInfo.processInfo.systemUptime),
+              spatialKeyboardWindowActive else { return }
+        take(automatic: false, userInitiated: true, makeKey: false)
+    }
+    private func noteSpatialKeyboardInteraction() {
+        spatialKeyboardInteraction.tap(now: ProcessInfo.processInfo.systemUptime)
+    }
     override func layoutSubviews() {
         super.layoutSubviews()
         if spatialBounds != bounds.size {
@@ -132,6 +134,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         }
     }
     fileprivate func cancelSpatialInput() {
+        cancelPendingSpatialKeyboard()
         let wasAllowed = spatialGate.allowed
         spatialGate.allowed = false
         defer { spatialGate.allowed = wasAllowed }
@@ -255,7 +258,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     }
     private var acceptsSpatialKeyboardInput: Bool { spatialKeyboardWindowActive && isFirstResponder }
 
-    private func releaseSpatialFocus() {
+    fileprivate func releaseSpatialFocus() {
         cancelPendingSpatialKeyboard()
         // A departing layout may share a proxy with its replacement. Its teardown
         // releases only its own responder and old destination, never the new view.
@@ -340,6 +343,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         #if os(visionOS)
         if mouseMode {
             guard let point = relativePointer.current(feed: pointerFeed()) else { return }
+            noteSpatialKeyboardInteraction()
             sendRelative(.leftDown, at: point)
             sendRelative(.leftUp, at: point)
             return
@@ -352,11 +356,14 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private func tap(at point: CGPoint) {
         setOwnPointer(nil, .none)
         guard sendPointer(.move, at: point, clamped: false) != nil else { return }
+        #if os(visionOS)
+        noteSpatialKeyboardInteraction()
+        #endif
         sendPointer(.leftDown, at: point, clamped: false)
         sendPointer(.leftUp, at: point, clamped: false)
         #if os(visionOS)
         showSpatialPointer(at: point, clamped: false)
-        // Video frames do not expose text-field focus. Typing requires Keyboard > Show keyboard.
+        // Only this recent local tap can authorize the one-shot host editable-field reply.
         #endif
     }
 
@@ -638,6 +645,9 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         if window != nil {
             InputScript.overlay = self
             runInputTest()
+            #if os(visionOS)
+            runSpatialKeyboardFocusProbe()
+            #endif
         } else if InputScript.overlay === self {
             InputScript.overlay = nil
         }
@@ -685,6 +695,55 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         let velocity = length > 0 ? CGPoint(x: dx / length * 600, y: dy / length * 600) : .zero
         scroll(.ended, at: at, translation: CGPoint(x: dx, y: dy), velocity: velocity, from: source)
     }
+
+    #if os(visionOS)
+    private var spatialKeyboardProbeRan = false
+    /// DEBUG only, on a private simulator: exercise the real window/proxy/responder, never type.
+    private func runSpatialKeyboardFocusProbe() {
+        guard !spatialKeyboardProbeRan,
+              UserDefaults.standard.bool(forKey: "SillKeyboardFocusProbe") else { return }
+        spatialKeyboardProbeRan = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, let proxy = self.keyboardProxy, proxy.view === self,
+                  self.spatialGate.allowed, self.window != nil else {
+                NSLog("KEYBOARD_FOCUS_PROBE ready=0"); return
+            }
+            func report(_ phase: Int) {
+                NSLog("KEYBOARD_FOCUS_PROBE phase=%d first=%d eligible=%d own=%d key=%d",
+                      phase, self.isFirstResponder ? 1 : 0, self.canBecomeFirstResponder ? 1 : 0,
+                      proxy.policy.isOwn ? 1 : 0, self.window?.isKeyWindow == true ? 1 : 0)
+            }
+            proxy.setKeyboard(shown: false)
+            report(0) // Idle cannot be restored by UIKit.
+            proxy.showKeyboardFromUserAction()
+            report(1) // Explicit acquisition and active-composition eligibility.
+            _ = self.resignFirstResponder()
+            report(2)
+            _ = self.becomeFirstResponder()
+            proxy.setKeyboard(shown: true)
+            self.take(automatic: false)
+            report(3) // UIKit, panel restoration and passive take all remain idle.
+            self.noteSpatialKeyboardInteraction()
+            self.cancelPendingSpatialKeyboard()
+            proxy.showKeyboardForEditableFocus()
+            report(4) // Canceled local tap cannot authorize an AX reply.
+            self.spatialGate.allowed = false
+            proxy.showKeyboardFromUserAction()
+            self.spatialGate.allowed = true
+            report(5) // Re-enabling the surface never replays a blocked request.
+            proxy.showKeyboardFromUserAction()
+            report(6) // A fresh explicit request still works after every loss.
+            proxy.setKeyboard(shown: false)
+            report(7)
+            self.noteSpatialKeyboardInteraction()
+            proxy.showKeyboardForEditableFocus()
+            report(8) // A fresh local tap's AX path acquires in an already-key window.
+            proxy.setKeyboard(shown: false)
+            proxy.showKeyboardForEditableFocus()
+            report(9) // The same local tap cannot be reused.
+        }
+    }
+    #endif
 
     /// `-SillInputTest 1`'s third part (InputTest), in every layout, 4.4 s after the overlay joins a
     /// window (after the portrait key row's and trackpad's): Esc and ⇧Esc through the key command's own
@@ -821,6 +880,9 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
         guard let touch = (activePointerTouch.flatMap { touches.contains($0) ? $0 : nil } ?? Self.pointerTouch(in: touches, event: event)) else {
             super.touchesEnded(touches, with: event); return
         }
+        #if os(visionOS)
+        if !pointerButtonIsSecondary { noteSpatialKeyboardInteraction() }
+        #endif
         if let at = sendPointer(pointerButtonIsSecondary ? .rightUp : .leftUp, at: touch.location(in: self), clamped: true) {
             ownPointer(at, for: touch)
         }
@@ -831,6 +893,7 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         #if os(visionOS)
         // A hand can cancel before tap/hold recognizers arm or a pointer button is tracked.
+        cancelPendingSpatialKeyboard()
         setOwnPointer(nil, .none)
         #endif
         guard let touch = (activePointerTouch.flatMap { touches.contains($0) ? $0 : nil } ?? Self.pointerTouch(in: touches, event: event)) else {
@@ -850,7 +913,8 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     override var canBecomeFirstResponder: Bool {
         #if os(visionOS)
-        return spatialGate.allowed
+        // Retain an active composition, but refuse UIKit restoration after resignation.
+        return spatialGate.allowed && (isFirstResponder || spatialKeyboardRequest)
         #else
         return true
         #endif
@@ -928,16 +992,18 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     // MARK: Who holds the keyboard (InputOverlayProxy, HardwareKeyboardPolicy)
 
     /// The proxy's `take`: first responder, for the hardware keyboard (`automatic`) or as the person's.
-    func take(automatic: Bool) {
+    func take(automatic: Bool, userInitiated: Bool = false, makeKey: Bool = true) {
         #if os(visionOS)
-        guard let window, UIApplication.shared.applicationState == .active else {
-            spatialKeyboardRestore.cancel(); return
-        }
-        guard spatialGate.allowed else { spatialKeyboardRestore.request(automatic: automatic); return }
-        spatialKeyboardRestore.cancel()
-        // Spatial toolbar touches can arrive while this window is not key. The explicit Keyboard
-        // action must establish keyboard focus rather than silently reject the request beforehand.
-        if !automatic { window.makeKey() }
+        // Every acquisition needs fresh local intent. Settings, scene changes, layout updates,
+        // attached keyboards and queued restoration are never keyboard-focus requests.
+        guard userInitiated, !automatic, spatialGate.allowed, let window,
+              window.windowScene?.activationState == .foregroundActive,
+              UIApplication.shared.applicationState == .active else { return }
+        cancelPendingSpatialKeyboard()
+        if makeKey { window.makeKey() } // Only the deliberate Keyboard toolbar action.
+        guard spatialKeyboardWindowActive else { return }
+        spatialKeyboardRequest = true
+        defer { spatialKeyboardRequest = false }
         #endif
         askedAutomatic = automatic
         let became = becomeFirstResponder()
@@ -958,10 +1024,10 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
 
     override func becomeFirstResponder() -> Bool {
         #if os(visionOS)
+        // Retain an existing composition without acquiring again.
+        if isFirstResponder && !spatialKeyboardRequest { return true }
         // UIKit restoration is not an explicit request to redirect the user's shared keyboard.
-        guard askedAutomatic != nil, spatialGate.allowed, window != nil,
-              (askedAutomatic == false || window?.isKeyWindow == true),
-              UIApplication.shared.applicationState == .active else { return false }
+        guard spatialKeyboardRequest, askedAutomatic == false, spatialKeyboardWindowActive else { return false }
         #endif
         // Before UIKit reads `inputView`: what this holding is, asked or (UIKit's own) as the rule says.
         let automatic = askedAutomatic ?? (keyboardProxy?.unpromptedKindIsAutomatic(for: self) ?? false)
@@ -979,6 +1045,13 @@ final class InputOverlayView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned {
+            #if os(visionOS)
+            cancelPendingSpatialKeyboard()
+            if keyboardProxy?.view === self {
+                cancelRemoteKeyboardRequest()
+                keyboardProxy?.focusEpoch = UUID()
+            }
+            #endif
             releaseForwardedKeys()
             keyboardProxy?.resigned(self)
         }
@@ -1189,8 +1262,15 @@ final class InputOverlayProxy {
     /// in a window that already owns focus. It must never make a background window key.
     func showKeyboardForEditableFocus() {
         guard view?.spatialKeyboardWindowActive == true else { return }
-        setKeyboard(shown: true)
+        view?.takeKeyboardFromEditableInteraction()
     }
+    /// Called exclusively by deliberate Keyboard toolbar actions, never restoration.
+    func showKeyboardFromUserAction() {
+        spatialUserKeyboardAction = true
+        defer { spatialUserKeyboardAction = false }
+        change("the Keyboard button") { $0.shown(true) }
+    }
+    private var spatialUserKeyboardAction = false
     func rightClick(client: StreamClient) {
         guard let target = spatialTarget, client.connected, view?.window?.isKeyWindow == true,
               UIApplication.shared.applicationState == .active,
@@ -1202,14 +1282,23 @@ final class InputOverlayProxy {
     #endif
 
     /// The Keyboard button (and the portrait key row's keyboard cap).
-    func toggleKeyboard() { change("the Keyboard button") { $0.toggled() } }
+    func toggleKeyboard() {
+        #if os(visionOS)
+        spatialUserKeyboardAction = true
+        defer { spatialUserKeyboardAction = false }
+        #endif
+        change("the Keyboard button") { $0.toggled() }
+    }
     /// Takes the keyboard down or puts the person's back, and with it hardware-key forwarding to the
     /// Mac: the overlay forwards keys only while it is first responder. The Settings panel takes it
     /// down while open, so Esc reaches its Done button instead of the Mac, and puts the person's back
     /// after (a hardware keyboard's hold comes back by itself, `takers`).
     func setKeyboard(shown: Bool) {
         #if os(visionOS)
-        if !shown { view?.cancelPendingSpatialKeyboard() }
+        // The iPad restores its software keyboard after panels; spatial typing must be
+        // requested again. Visibility/scene changes are not evidence of keyboard ownership.
+        if shown { return }
+        view?.cancelPendingSpatialKeyboard()
         #endif
         change(shown ? "the person's keyboard back" : "taken down") { $0.shown(shown) }
     }
@@ -1267,7 +1356,12 @@ final class InputOverlayProxy {
         #endif
         for action in actions {
             switch action {
-            case .take(let automatic): view?.take(automatic: automatic)
+            case .take(let automatic):
+                #if os(visionOS)
+                view?.take(automatic: automatic, userInitiated: spatialUserKeyboardAction)
+                #else
+                view?.take(automatic: automatic)
+                #endif
             case .makeOwn: view?.setHoldsForHardwareKeyboard(false)
             case .makeAutomatic: view?.setHoldsForHardwareKeyboard(true)
             case .letGo: if view?.isFirstResponder == true { _ = view?.resignFirstResponder() }
@@ -1357,9 +1451,8 @@ struct InputOverlay: UIViewRepresentable {
 
     static func dismantleUIView(_ view: InputOverlayView, coordinator: ()) {
         #if os(visionOS)
+        view.releaseSpatialFocus()
         view.spatialGate.allowed = false
-        view.cancelSpatialInput()
-        view.cancelPendingSpatialKeyboard()
         #endif
     }
 

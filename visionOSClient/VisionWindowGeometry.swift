@@ -270,7 +270,7 @@ final class VisionWindowGeometryView: UIView {
         #endif
         scene.requestGeometryUpdate(.Vision(size: requested,
                                              minimumSize: geometry?.minimum ?? VisionWindowSizePolicy.minimum,
-                                             maximumSize: geometry?.maximum ?? VisionWindowSizePolicy.maximum,
+                                             maximumSize: geometry?.maximum ?? VisionWindowSizePolicy.openingMaximum,
                                              resizingRestrictions: locked ? .uniform : .freeform)) { [weak self, weak scene] error in
             guard let self, let scene, self.owningScene === scene else { return }
             if let generation {

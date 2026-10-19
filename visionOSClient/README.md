@@ -65,7 +65,13 @@ release right-clicks; hold then move starts a left drag. Mouse mode uses a relat
 cursor with click-at-cursor and a one-time recenter after source changes. Physical
 pointer input retains its separate route. Keyboard explicitly toggles capture; hold it for 0.5 seconds to open its tools
 (including Paste Text and right-click at the last point). Source, local focus and scene changes cancel held input. Clipboard sharing starts
-off and system Paste retains session/focus checks.
+off and system Paste retains session/focus checks. Keyboard acquisition on visionOS requires a deliberate
+Keyboard action or a recent, single-use local click with matching host editable confirmation.
+Only the explicit Keyboard action may make its window key. Panel restoration, gate reopening,
+hardware attachment and unsolicited responder restoration do not reacquire the keyboard;
+resignation cancels pending intent. Closing Settings therefore does not restore capture automatically.
+Touch/Mouse instructions and cursor recovery are available under Settings → Touch and Mouse
+instructions, with no instruction overlay covering the streamed picture.
 
 The host changes are part of this contribution:
 
@@ -199,7 +205,13 @@ and effective uniform restriction before recording success. Two bounded attempts
 refusals or delayed transitions; an unconfirmed size remains freeform and retries after activation
 or a different source. Requests are canceled when the owning scene detaches, disconnects,
 deactivates, or changes source. The picture fills a matching scene without fixed padding. Minimum, preferred and maximum sizes scale
-uniformly. Login and selections awaiting valid dimensions allow freeform resizing. Later
+uniformly. Initial scenes retain the existing 1400×1050-point opening envelope; streaming
+scenes can then be resized natively within a 3840×2880-point envelope, fitted to the source
+aspect (for example, a 16:9 Desktop opens at 1400×787.5 and permits up to 3840×2160).
+This is a finite app ceiling, not a guarantee of the system's accepted maximum. These are UI
+points, not captured pixels: enlarging Desktop increases its presentation size without requesting
+extra Desktop capture resolution. Login retains its 580×480 preferred size and 1400×1050 maximum.
+Login and selections awaiting valid dimensions allow freeform resizing. Later
 window video/catalog changes preserve the selection snapshot; Desktop updates only when its
 encoded dimensions change. Desktop capture does not follow the viewport, so neither path
 creates a viewport-to-scene sizing loop. Geometry requests remain system preferences and can
@@ -221,6 +233,11 @@ the blue fitted source. `NATIVE_GEOMETRY` stdout records actual SwiftUI bounds, 
 and observed UIKit bounds/restrictions. This isolates scene resizing; its injected Desktop size
 does not establish HEVC transport delivery, real stream layout, or headset acceptance. Normal
 DEBUG sessions also log source-bound HEVC dimension acceptance and waiting for missing dimensions.
+Add `-SillNativeLargeResize1` to this fixture launch to request 2400×1350 after the normal Desktop
+aspect lock is observed. `NATIVE_LARGE_RESIZE` reports the requested size, actual own-window
+bounds and effective maximum; confirmation also requires the uniform restriction. This opt-in
+probe does not affect normal streaming or the default fixture sequence and does not simulate a
+physical resize gesture.
 
 The last 30 geometry events are also saved to `Library/Caches/SillWindowGeometry.json` in all
 build configurations. Each event contains only numeric timestamp, phase, ephemeral scene ordinal,

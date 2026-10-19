@@ -43,27 +43,25 @@ for allowed in [false, true] {
     }
 }
 expect(!VisionKeyboardFocusPolicy.canActivate(allowed: true, keyWindow: false, sceneActive: true),
-       "another app's focus blocks keyboard even while Sill's scene remains active")
+       "non-key scene windows cannot acquire even while active")
 expect(VisionSurfaceInputPolicy.showsPointer(source: .desktop, allowed: true, attached: true, foreground: true),
        "keyboard focus exclusion does not remove accepted non-key spatial pointer feedback")
 
-var restore = VisionKeyboardRestorePolicy()
-restore.request(automatic: false)
-let first = restore.dequeue()!
-expect(restore.accepts(first), "current queued own restoration accepted")
-restore.cancel()
-expect(!restore.accepts(first), "false request invalidates already queued restore")
-restore.request(automatic: true)
-let second = restore.dequeue()!
-restore.cancel() // Source/scene/allowed transition.
-expect(!restore.accepts(second), "context/gate cycle invalidates queued restoration")
-restore.request(automatic: false)
-let third = restore.dequeue()!
-restore.request(automatic: true)
-expect(!restore.accepts(third), "newer keyboard request wins")
-let latest = restore.dequeue()!
-expect(restore.accepts(latest) && latest.automatic, "latest requested ownership preserved")
-expect(restore.dequeue() == nil, "pending restore dequeues once")
+var interaction = VisionKeyboardInteractionPolicy()
+expect(!interaction.consume(now: 10), "host focus without a local tap cannot acquire")
+interaction.tap(now: 10)
+expect(interaction.consume(now: 10.2), "recent local tap authorizes one correlated AX activation")
+expect(!interaction.consume(now: 10.3), "local intent consumed once even if a positive host token survives")
+interaction.tap(now: 10)
+interaction.cancel()
+expect(!interaction.consume(now: 10.2), "resignation/source change/teardown revoke local tap intent")
+interaction.tap(now: 10)
+expect(!interaction.consume(now: 12), "late AX reply cannot revive old local intent")
+interaction.tap(now: 10)
+expect(!interaction.consume(now: 9), "clock discontinuity is unknown")
+interaction.tap(now: 10)
+interaction.tap(now: 11)
+expect(interaction.consume(now: 12), "latest deliberate interaction replaces old intent")
 
 for source: StreamSource in [.desktop, .window(42), .none] {
     let active = source != .none

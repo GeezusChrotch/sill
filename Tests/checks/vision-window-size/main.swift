@@ -15,7 +15,7 @@ for source in [CGSize(width: 1000, height: 700), CGSize(width: 600, height: 1200
     guard let geometry = VisionWindowSizePolicy.geometry(source: source) else { fatalError("Valid source rejected") }
     for scene in [geometry.minimum, geometry.preferred, geometry.maximum] {
         expect(sameRatio(scene, source), "Scene geometry changed source aspect: \(source) → \(scene)")
-        expect(scene.width <= 1400.000001 && scene.height <= 1050.000001, "Maximum envelope violated")
+        expect(scene.width <= 3840.000001 && scene.height <= 2880.000001, "Maximum envelope violated")
         expect(scene.width >= geometry.minimum.width && scene.height >= geometry.minimum.height, "Below resize minimum")
     }
     for fraction: CGFloat in [0, 0.1, 0.5, 0.9, 1] {
@@ -28,6 +28,29 @@ for source in [CGSize(width: 1000, height: 700), CGSize(width: 600, height: 1200
                "Uniform resizing introduced letterboxing at \(scene)")
     }
 }
+// Increasing the native resize ceiling must not enlarge the initial scene or change
+// established minima. Both window and Desktop selections share this geometry policy.
+for source in [CGSize(width: 3840, height: 2160), CGSize(width: 600, height: 1200),
+               CGSize(width: 60, height: 40), CGSize(width: 4000, height: 200)] {
+    let geometry = VisionWindowSizePolicy.geometry(source: source)!
+    let minimumScale = min(440 / source.width, 360 / source.height)
+    let oldOpeningScale = min(1400 / source.width, 1050 / source.height)
+    let preferredScale = min(oldOpeningScale, max(minimumScale, 1))
+    expect(geometry.preferred == CGSize(width: source.width * preferredScale, height: source.height * preferredScale),
+           "Resize ceiling must preserve previous preferred size")
+    expect(geometry.minimum == CGSize(width: source.width * minimumScale, height: source.height * minimumScale),
+           "Resize ceiling must preserve previous minimum size")
+    expect(geometry.maximum.width > geometry.preferred.width && geometry.maximum.height > geometry.preferred.height,
+           "Valid source must have room to resize beyond opening footprint")
+}
+let desktop = VisionWindowSizePolicy.geometry(source: CGSize(width: 3840, height: 2160))!
+expect(desktop.preferred == CGSize(width: 1400, height: 787.5), "Desktop opening size changed")
+expect(desktop.maximum == CGSize(width: 3840, height: 2160), "Desktop native resize ceiling should grow")
+expect(VisionWindowSizePolicy.geometry(source: CGSize(width: 2160, height: 3840))!.maximum == CGSize(width: 1620, height: 2880),
+       "Portrait resize ceiling must fit the larger envelope uniformly")
+expect(VisionWindowSizePolicy.login == CGSize(width: 580, height: 480)
+       && VisionWindowSizePolicy.openingMaximum == CGSize(width: 1400, height: 1050), "Login limits changed")
+
 let ordinary = VisionWindowSizePolicy.geometry(source: CGSize(width: 1000, height: 700))!
 expect(ordinary.preferred == CGSize(width: 1000, height: 700), "Ordinary source should open at source size")
 expect(VisionWindowSizePolicy.geometry(source: CGSize(width: 60, height: 40))!.preferred == CGSize(width: 440, height: 440.0 * 2 / 3),

@@ -1137,7 +1137,11 @@ struct StreamScreen: View {
                 return
             }
             #endif
+            #if os(visionOS)
+            overlay.showKeyboardFromUserAction()
+            #else
             overlay.setKeyboard(shown: true)
+            #endif
         }
     }
 
@@ -1396,9 +1400,6 @@ struct StreamScreen: View {
                              onModifiersConsumed: { latched = [] },
                              sendGesture: { client.sendGesture($0, fingers: $1) })
                     .spatialInputBoundary(client: client)
-                #if os(visionOS)
-                VisionPointerRecovery(client: client).frame(maxHeight: .infinity, alignment: .bottom)
-                #endif
             }
             .background(Palette.panel)
             .overlay(alignment: .top) { LinkLineView(text: shownLinkLine) }

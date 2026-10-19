@@ -52,27 +52,26 @@ enum VisionSurfaceInputPolicy {
     }
 }
 
-/// Pointer delivery is deliberately allowed in non-key windows; keyboard delivery is not.
-/// A scene may remain visible and the process active while another app owns typing.
+/// Necessary local keyboard prerequisites, separate from pointer delivery. A key window
+/// belongs to its own scene; these flags do not identify system-wide keyboard ownership.
 enum VisionKeyboardFocusPolicy {
     static func canActivate(allowed: Bool, keyWindow: Bool, sceneActive: Bool) -> Bool {
         allowed && keyWindow && sceneActive
     }
 }
 
-/// Invalidates queued focus restoration when a newer request, cancellation or context wins.
-struct VisionKeyboardRestorePolicy {
-    struct Ticket: Equatable { let generation: Int; let automatic: Bool }
-    private var generation = 0
-    private var pending: Bool?
-    mutating func request(automatic: Bool) { generation += 1; pending = automatic }
-    mutating func cancel() { generation += 1; pending = nil }
-    mutating func dequeue() -> Ticket? {
-        guard let automatic = pending else { return nil }
-        pending = nil
-        return Ticket(generation: generation, automatic: automatic)
+/// A host AX reply may request typing only after a recent local completed primary tap.
+/// One use; resignation, context loss and teardown invalidate it. This is intent evidence,
+/// not a claim that our scene's key window identifies the system-wide keyboard owner.
+struct VisionKeyboardInteractionPolicy {
+    private var tappedAt: Double?
+    mutating func tap(now: Double) { tappedAt = now }
+    mutating func cancel() { tappedAt = nil }
+    mutating func consume(now: Double) -> Bool {
+        defer { tappedAt = nil }
+        guard let tappedAt else { return false }
+        return now >= tappedAt && now - tappedAt <= 1.5
     }
-    func accepts(_ ticket: Ticket) -> Bool { generation == ticket.generation }
 }
 
 /// Relative hand motion shares the portrait trackpad's anchor and clamping rules. Unknown and
@@ -207,31 +206,6 @@ struct VisionMouseModeButton: View {
         .accessibilityHint(client.visionMouseMode
                             ? "Switch to Touch mode. Instructions are in Settings."
                             : "Switch to Mouse mode. Instructions are in Settings.")
-    }
-}
-#endif
-
-#if os(visionOS)
-struct VisionPointerRecovery: View {
-    @ObservedObject var client: StreamClient
-    @Environment(\.spatialInputAllowed) private var allowed
-    var body: some View {
-        let session = client.connectedAt, source = client.active, epoch = client.visionMouseEpoch
-        if client.visionMouseMode && !client.visionPointerKnown && source != .none && allowed {
-            VStack(spacing: 6) {
-                Text("Cursor position unavailable").font(.caption)
-                Button("Place cursor in centre") { client.placeVisionPointer(in: session, source: source, modeEpoch: epoch) }
-                Text("Or switch to Touch to choose a position.").font(.caption2)
-            }
-            .padding(12)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            .padding(16)
-        } else if client.visionMouseMode && allowed {
-            Text("Pinch-drag moves • Tap clicks • Hold-release right-clicks • Hold, then move drags • Touch mode scrolls")
-                .font(.caption2).padding(8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                .padding(12).allowsHitTesting(false)
-        }
     }
 }
 #endif

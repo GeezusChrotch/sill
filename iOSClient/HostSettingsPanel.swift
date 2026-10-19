@@ -36,6 +36,9 @@ struct HostSettingsPanel: View {
     @AccessibilityFocusState private var headerFocused: Bool
     /// Two seconds on this connection and still no state: the Mac runs a Sill without settings.
     @State private var olderMac = false
+    #if os(visionOS)
+    @State private var spatialModeDetails = false
+    #endif
     /// Bumped when Low Power Mode toggles, so the frame rate note is read again.
     @State private var powerState = 0
     /// This device's switch for three-finger gestures (docs/trackpad-gestures-plan.md §8): on unless
@@ -336,7 +339,11 @@ struct HostSettingsPanel: View {
             // After everything of the Mac's, whatever state its settings are in: while they load, and
             // for a Mac without them too. Both are this device's own: its gestures, then the tour.
             #if os(visionOS)
-            spatialModeHelp
+            DisclosureGroup("Touch and Mouse instructions", isExpanded: $spatialModeDetails) {
+                spatialModeHelp
+            }
+            .foregroundStyle(Palette.text)
+            .padding(.horizontal, 14)
             #endif
             thisDevice
             tour
@@ -467,7 +474,7 @@ struct HostSettingsPanel: View {
     }
 
     #if os(visionOS)
-    /// Instructions live in the active Settings scroll area, away from toolbar hover targets.
+    /// Deliberately expanded Settings details; no instructions or recovery panel covers the stream.
     private var spatialModeHelp: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Touch and Mouse")
@@ -477,6 +484,14 @@ struct HostSettingsPanel: View {
             Text("Switch modes with Touch/Mouse in the left toolbar.")
             Text("Touch: tap targets the picture; pinch-drag scrolls.")
             Text("Mouse: pinch-drag moves the pointer; tap clicks it. Switching windows centres the pointer. Hold, then move to drag; hold and release to right-click. Switch to Touch to scroll.")
+            if client.visionMouseMode && !client.visionPointerKnown && client.active != .none {
+                Text("Cursor position unavailable. Place it in the centre, or switch to Touch to choose a position.")
+                let session = client.connectedAt, source = client.active, mode = client.visionMouseEpoch
+                Button("Place cursor in centre") {
+                    close()
+                    client.placeVisionPointer(in: session, source: source, modeEpoch: mode)
+                }
+            }
         }
         .font(.footnote)
         .foregroundStyle(Palette.text)

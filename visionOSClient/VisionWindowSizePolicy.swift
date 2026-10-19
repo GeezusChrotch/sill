@@ -8,7 +8,12 @@ import CoreGraphics
 enum VisionWindowSizePolicy {
     static let login = CGSize(width: 580, height: 480)
     static let minimum = CGSize(width: 440, height: 360)
-    static let maximum = CGSize(width: 1400, height: 1050)
+    // Scene sizes are UI points, independent of decoded video pixels. Keep the existing
+    // opening footprint while allowing deliberate native resizing to a larger picture.
+    static let openingMaximum = CGSize(width: 1400, height: 1050)
+    // A finite app policy, not a claimed visionOS limit: accommodates a 3840-point-wide
+    // landscape scene or a 2880-point-tall portrait scene without forcing either at launch.
+    static let streamMaximum = CGSize(width: 3840, height: 2880)
 
     struct WindowGeometry {
         let preferred: CGSize
@@ -35,11 +40,12 @@ enum VisionWindowSizePolicy {
         // especially for tiny, very wide, or very tall windows. The minimum envelope is soft:
         // its shorter dimension may be below the login/Desktop minimum for unusual ratios.
         let minimumScale = min(minimum.width / source.width, minimum.height / source.height)
-        let maximumScale = min(maximum.width / source.width, maximum.height / source.height)
+        let openingScale = min(openingMaximum.width / source.width, openingMaximum.height / source.height)
+        let maximumScale = min(streamMaximum.width / source.width, streamMaximum.height / source.height)
         func scaled(_ scale: CGFloat) -> CGSize {
             CGSize(width: source.width * scale, height: source.height * scale)
         }
-        return WindowGeometry(preferred: scaled(min(maximumScale, max(minimumScale, 1))),
+        return WindowGeometry(preferred: scaled(min(openingScale, max(minimumScale, 1))),
                               minimum: scaled(minimumScale), maximum: scaled(maximumScale))
     }
 }
