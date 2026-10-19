@@ -18,19 +18,20 @@ struct VisionToolbarReveal: ViewModifier {
     }
 }
 
-/// A faint, nonzero surface remains visible while Auto is collapsed. It shares
-/// the bars' hover group and sits inside the future bar footprint, rather than on a rail
+/// A translucent surface remains visible while Auto is collapsed. It shares
+/// the bars' hover group and stays centered behind each toolbar, rather than on a rail
 /// between the picture and toolbar. It is a glance target, with no tap action to compete
 /// with the controls above it in the ornament's hit-test hierarchy.
 struct VisionToolbarGlanceTarget: View {
     let vertical: Bool
+    let length: CGFloat
     let reduceMotion: Bool
     let group: HoverEffectGroup
 
     var body: some View {
         Capsule()
-            .fill(.black.opacity(0.05))
-            .frame(width: vertical ? 24 : 72, height: vertical ? 72 : 24)
+            .fill(.black.opacity(0.30))
+            .frame(width: vertical ? 24 : length, height: vertical ? length : 24)
             .contentShape(.hoverEffect, Capsule())
             .hoverEffect(.highlight, in: group)
             .hoverEffect(in: group) { effect, active, _ in

@@ -1197,7 +1197,7 @@ struct StreamScreen: View {
         }
         .ornament(attachmentAnchor: .scene(.leading), contentAlignment: .trailing) {
             if tour == nil {
-                spatialControlsBar(height: max(180, min(750, size.height)))
+                spatialControlsBar(height: max(180, min(750, size.height)), glanceLength: size.height / 3)
                     .padding(.trailing, 12)
             }
         }
@@ -1206,7 +1206,7 @@ struct StreamScreen: View {
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
         ZStack {
             if spatialToolbarUsesHover {
-                VisionToolbarGlanceTarget(vertical: false, reduceMotion: reduceMotion,
+                VisionToolbarGlanceTarget(vertical: false, length: size.width / 3, reduceMotion: reduceMotion,
                                          group: spatialToolbarHoverGroup)
             }
             ScrollView(.horizontal, showsIndicators: false) {
@@ -1242,10 +1242,10 @@ struct StreamScreen: View {
         }
     }
 
-    private func spatialControlsBar(height: CGFloat) -> some View {
+    private func spatialControlsBar(height: CGFloat, glanceLength: CGFloat) -> some View {
         ZStack {
             if spatialToolbarUsesHover {
-                VisionToolbarGlanceTarget(vertical: true, reduceMotion: reduceMotion,
+                VisionToolbarGlanceTarget(vertical: true, length: glanceLength, reduceMotion: reduceMotion,
                                          group: spatialToolbarHoverGroup)
             }
             ScrollView(.vertical, showsIndicators: false) {
