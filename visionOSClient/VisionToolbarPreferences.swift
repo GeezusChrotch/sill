@@ -30,7 +30,7 @@ struct VisionToolbarGlanceTarget: View {
 
     var body: some View {
         Capsule()
-            .fill(.black.opacity(0.30))
+            .fill(.black.opacity(0.50))
             .frame(width: vertical ? 24 : length, height: vertical ? length : 24)
             .contentShape(.hoverEffect, Capsule())
             .hoverEffect(.highlight, in: group)
