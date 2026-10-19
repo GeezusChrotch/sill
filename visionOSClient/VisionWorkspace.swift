@@ -5,8 +5,8 @@ import StreamProtocol
 #endif
 
 /// SceneStorage contains references to paired identity and window identity, never credentials,
-/// addresses, a connection seed, window titles or keyboard state. visionOS owns the scene set
-/// and spatial placement; there is deliberately no launch-time openWindow replay loop.
+/// addresses, a connection seed, window titles or keyboard state. visionOS owns spatial placement; a bounded credential-free scene-set journal can
+/// recover missing windows after a whole-process exit.
 struct VisionWorkspace: Codable, Equatable {
     var version = 1
     var macID: String

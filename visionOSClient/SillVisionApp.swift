@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct SillVisionApp: App {
+    @UIApplicationDelegateAdaptor(VisionSceneSetAppDelegate.self) private var appDelegate
     private var initialSize: CGSize {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-SillNativeRestore1") {
@@ -13,14 +14,15 @@ struct SillVisionApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "sill-main") {
             VisionSessionView()
         }
         .windowStyle(.plain)
         .defaultSize(width: initialSize.width, height: initialSize.height)
 
         WindowGroup("Sill", id: "sill-session", for: UUID.self) { $windowID in
-            VisionSessionView(windowID: windowID)
+            VisionSessionView(windowID: windowID, isSecondary: true)
+                .id(windowID)
         }
         .windowStyle(.plain)
         .defaultSize(width: 1200, height: 800)

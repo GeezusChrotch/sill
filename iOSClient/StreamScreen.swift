@@ -103,9 +103,19 @@ enum DuoLayout {
 struct StreamScreen: View {
     @ObservedObject var client: StreamClient
     #if os(visionOS)
-    @SceneStorage("Sill.spatialToolbarAutomatic") private var spatialToolbarAutomatic = true
-    @SceneStorage("Sill.spatialMouseMode") private var spatialSavedMouseMode = false
-    @SceneStorage("Sill.spatialTextScale") private var spatialSavedTextScale = 0.0
+    @Environment(\.spatialScenePreferences) private var spatialPreferences
+    private var spatialToolbarAutomatic: Bool {
+        get { spatialPreferences?.wrappedValue.toolbarAutomatic ?? true }
+        nonmutating set { spatialPreferences?.wrappedValue.toolbarAutomatic = newValue }
+    }
+    private var spatialSavedMouseMode: Bool {
+        get { spatialPreferences?.wrappedValue.mouseMode ?? false }
+        nonmutating set { spatialPreferences?.wrappedValue.mouseMode = newValue }
+    }
+    private var spatialSavedTextScale: Double {
+        get { spatialPreferences?.wrappedValue.textScale ?? 0 }
+        nonmutating set { spatialPreferences?.wrappedValue.textScale = newValue }
+    }
     @State private var spatialToolbarHoverGeneration = 0
     @State private var spatialToolbarScrollActive = false
     @Namespace private var spatialToolbarHoverNamespace

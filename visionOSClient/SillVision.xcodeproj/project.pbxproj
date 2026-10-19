@@ -38,6 +38,7 @@
 		6FEDC14A4A89C886F4BC514E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = D083BC0E6B1B250227A01F93 /* PrivacyInfo.xcprivacy */; };
 		70CF28443F3DA3949C201214 /* MockCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7955AA95FF632D943108088 /* MockCatalog.swift */; };
 		71A1BA923C073C7116B1F27A /* DiscoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9040EF1D2BFAF387CA68D67D /* DiscoveryPolicy.swift */; };
+		72705CA1534DF1010C320F5F /* VisionSceneSet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2D4552B6085AE3377FAB8D /* VisionSceneSet.swift */; };
 		767D03F73F84BE563FC53B9D /* StreamClient+Home.swift in Sources */ = {isa = PBXBuildFile; fileRef = 590E81606E56D8A684C550E9 /* StreamClient+Home.swift */; };
 		769E8D7E1D33A927EF9454CA /* VisionMacMenuButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06550E4143B0BA62871A23A6 /* VisionMacMenuButton.swift */; };
 		784A1B7DE31692B50B930251 /* DiagnosticsHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8C0B9518BBE552DB3F856E3 /* DiagnosticsHUD.swift */; };
@@ -151,6 +152,7 @@
 		F62ED20D388F0818EECAC548 /* StreamScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamScreen.swift; sourceTree = "<group>"; };
 		F74769F3E7592C6A93F1DB91 /* VisionInputGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionInputGeometry.swift; sourceTree = "<group>"; };
 		F8153744189BB38FDD3817AC /* MacMenuButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMenuButton.swift; sourceTree = "<group>"; };
+		FA2D4552B6085AE3377FAB8D /* VisionSceneSet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSceneSet.swift; sourceTree = "<group>"; };
 		FE3228237E1B25F04A191EB2 /* InputOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -253,6 +255,7 @@
 				ABD672B19E0C7D08999A955D /* VisionMacMenus.swift */,
 				29BC0C842059723948EFBEA3 /* VisionNativeGeometryFixture.swift */,
 				6D5579DD67C58BD8FA56F371 /* VisionSceneSessionLifecycle.swift */,
+				FA2D4552B6085AE3377FAB8D /* VisionSceneSet.swift */,
 				95C450623F0B26231BF3375F /* VisionScrollMomentum.swift */,
 				312AC885D30CA344D19CA5F9 /* VisionSessionPolicy.swift */,
 				A227B9BE32995F0F04525298 /* VisionSessionView.swift */,
@@ -409,6 +412,7 @@
 				403698CC053619B9621B2E71 /* VisionMacMenus.swift in Sources */,
 				EB8946E87C07F13A73AC88F9 /* VisionNativeGeometryFixture.swift in Sources */,
 				EAF87C0CE499C5F04DE733A3 /* VisionSceneSessionLifecycle.swift in Sources */,
+				72705CA1534DF1010C320F5F /* VisionSceneSet.swift in Sources */,
 				C0397BCDCCA72E1FD2B758BB /* VisionScrollMomentum.swift in Sources */,
 				12EDCEF914BA78B1D9E18257 /* VisionSessionPolicy.swift in Sources */,
 				5F4B271BAA433A9474C282F7 /* VisionSessionView.swift in Sources */,
@@ -482,7 +486,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -494,7 +498,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MARKETING_VERSION = 0.28.0;
+				MARKETING_VERSION = 0.29.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -561,7 +565,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -579,7 +583,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MARKETING_VERSION = 0.28.0;
+				MARKETING_VERSION = 0.29.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

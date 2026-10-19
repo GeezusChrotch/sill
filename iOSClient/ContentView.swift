@@ -8,11 +8,14 @@ struct ContentView: View {
     private let spatialSeed: VisionWindowSeed?
     private let spatialManualConnect: Bool
     @State private var spatialStartupPerformed = false
-    @SceneStorage("Sill.spatialWorkspace.v1") private var spatialWorkspace = ""
+    @Binding private var spatialWorkspace: String
+    @Environment(\.spatialSceneID) private var spatialSceneID
+    @Environment(\.spatialNativeSession) private var spatialNativeSession
 
-    init(spatialSeed: VisionWindowSeed? = nil, spatialManualConnect: Bool = false) {
+    init(spatialSeed: VisionWindowSeed? = nil, spatialManualConnect: Bool = false, spatialWorkspace: Binding<String> = .constant("")) {
         self.spatialSeed = spatialSeed
         self.spatialManualConnect = spatialManualConnect
+        _spatialWorkspace = spatialWorkspace
     }
     #endif
     /// Tells the host what this device sees, once a second while connected. Also covers the DEBUG
@@ -37,10 +40,17 @@ struct ContentView: View {
                    !saved.contains(where: { $0.macID == workspace.macID && $0.revoked != true && $0.newKey != true }) {
                     spatialWorkspace = ""
                 }
+                let admitted = Set(saved.filter { $0.revoked != true && $0.newKey != true && $0.fingerprintData != nil }.map(\.macID))
+                VisionSceneSetRecovery.shared.prune(admitted: admitted)
             }
             .onChange(of: client.connected) { _, _ in saveSpatialWorkspace() }
             .onChange(of: client.spatialPresentationSize) { _, _ in saveSpatialWorkspace() }
-            .onChange(of: client.spatialWorkspaceClearGeneration) { _, _ in spatialWorkspace = "" }
+            .onChange(of: client.spatialWorkspaceClearGeneration) { _, _ in
+                spatialWorkspace = ""
+                if let spatialNativeSession {
+                    VisionSceneSetRecovery.shared.clear(spatialSceneID, session: spatialNativeSession)
+                }
+            }
         #endif
     }
 
