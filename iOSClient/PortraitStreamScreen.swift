@@ -210,8 +210,10 @@ struct PortraitStreamScreen: View {
     private func openKeyboardTools() {
         #if os(visionOS)
         client.cancelRemoteKeyboardRequest()
-        #endif
+        showKeyboard()
+        #else
         overlay.toggleKeyboard()
+        #endif
     }
 
     // MARK: Two halves: the inner display, an iPad window
@@ -464,7 +466,7 @@ struct PortraitStreamScreen: View {
                 .tourTarget(.textSize)
 
             barButton(open: keyboardShown, symbol: "keyboard", label: "Keyboard", width: width,
-                      accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+                      accessibilityLabel: keyboardButtonLabel(shown: keyboardShown),
                       action: keyboardTapped)
                 .opacity(scaleOpen ? 0 : 1)
                 .allowsHitTesting(!scaleOpen)
@@ -881,7 +883,7 @@ private struct KeyRow: View {
             latchKey(key, title, flag, label: label)
         case .keyboard:
             cap(open: keyboardShown,
-                label: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+                label: keyboardButtonLabel(shown: keyboardShown),
                 action: { tap(key) }) {
                 Image(systemName: "keyboard")
                     .font(.system(size: 20))
@@ -981,5 +983,14 @@ private struct KeyRow: View {
             }
         }
     }
+    #endif
+}
+
+/// visionOS's Keyboard control enables a session; iPad keeps its existing toggle.
+private func keyboardButtonLabel(shown: Bool) -> String {
+    #if os(visionOS)
+    shown ? "Keyboard enabled" : "Enable keyboard"
+    #else
+    shown ? "Hide the keyboard" : "Show the keyboard"
     #endif
 }

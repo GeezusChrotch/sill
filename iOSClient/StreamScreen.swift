@@ -380,7 +380,7 @@ struct StreamScreen: View {
             if phase != .active {
                 scaleOpen = false; windowMenu = nil
                 #if os(visionOS)
-                overlay.setKeyboard(shown: false)
+                overlay.endSpatialKeyboardSession()
                 keyboardToolsOpen = false
                 keyboardShowEpoch = UUID()
                 keyboardBeforeSettings = false; keyboardAfterMenus = false; tourKeyboardAfter = false
@@ -1654,7 +1654,7 @@ private struct TopBar: View {
                     .allowsHitTesting(!scaleOpen)
                 #endif
                 button(open: keyboardShown, symbol: "keyboard", label: "Keyboard",
-                       accessibilityLabel: keyboardShown ? "Hide the keyboard" : "Show the keyboard",
+                       accessibilityLabel: keyboardButtonAccessibilityLabel,
                        action: keyboardTapped)
                     #if os(visionOS)
                     .visionKeyboardToolsGesture(tap: keyboardTapped) {
@@ -1735,9 +1735,21 @@ private struct TopBar: View {
             #endif
     }
 
+    private var keyboardButtonAccessibilityLabel: String {
+        #if os(visionOS)
+        keyboardShown ? "Keyboard enabled" : "Enable keyboard"
+        #else
+        keyboardShown ? "Hide the keyboard" : "Show the keyboard"
+        #endif
+    }
+
     private func keyboardTapped() {
         setSettings(false, false)
+        #if os(visionOS)
+        showKeyboard()
+        #else
         toggleKeyboard()
+        #endif
     }
 
     private func button(open: Bool, symbol: String, label: String, accessibilityLabel: String,
@@ -2730,7 +2742,7 @@ struct VisionKeyboardTools: View {
         VStack(alignment: .leading, spacing: 16) {
             Button("Right-click last point") { overlay.rightClick(client: client) }
                 .disabled(overlay.spatialTarget?.context != SpatialInputContext(session: client.connectedAt, source: client.active, mouseMode: client.visionMouseMode))
-            Text("Select a remote text field, then tap Keyboard in the toolbar to type. Tap Keyboard again to release typing. Opening these tools suspends input.")
+            Text("Tap Keyboard to enable typing until this Sill window loses focus. Opening local controls suspends typing; tap the stream or Keyboard to resume.")
                 .font(.caption).foregroundStyle(.secondary)
             let session = client.connectedAt
             let source = client.active

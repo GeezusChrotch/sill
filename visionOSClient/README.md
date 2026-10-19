@@ -63,13 +63,13 @@ source; normal iPhone/iPad builds retain their platform behavior.
 Touch mode maps hand taps to clicks and pans to scrolling. A stationary hold and
 release right-clicks; hold then move starts a left drag. Mouse mode uses a relative
 cursor with click-at-cursor and a one-time recenter after source changes. Physical
-pointer input retains its separate route. Keyboard explicitly toggles capture; hold it for 0.5 seconds to open its tools
+pointer input retains its separate route. Keyboard enables typing until its Sill scene loses focus; repeated taps keep it enabled. Hold it for 0.5 seconds to open its tools
 (including Paste Text and right-click at the last point). Source, local focus and scene changes cancel held input. Clipboard sharing starts
 off and system Paste retains session/focus checks. Keyboard acquisition on visionOS requires a deliberate
 Keyboard action or a recent, single-use local click with matching host editable confirmation.
 Only the explicit Keyboard action may make its window key. Panel restoration, gate reopening,
 hardware attachment and unsolicited responder restoration do not reacquire the keyboard;
-resignation cancels pending intent. Closing Settings therefore does not restore capture automatically.
+resignation cancels pending editable intent. Same-session Mac window/Desktop and pointer-mode changes preserve keyboard capture. Local controls temporarily suspend the responder while keeping the Keyboard button enabled; a deliberate tap back on the stream or Keyboard resumes. Closing a panel alone never reacquires. Losing scene/window focus or disconnecting clears the enabled session; returning focus alone leaves it off.
 Touch/Mouse instructions and cursor recovery are available under Settings → Touch and Mouse
 instructions, with no instruction overlay covering the streamed picture.
 
