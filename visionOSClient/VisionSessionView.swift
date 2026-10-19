@@ -54,7 +54,15 @@ struct VisionSessionView: View {
                 Text("Scene-set fixture: \(windowID?.uuidString ?? "primary")")
                 Text("Mouse \(mouse ? "on" : "off"), scale \(scale), auto \(automatic ? "on" : "off")")
             }
-            .onAppear { print("SCENE_SET fixture key=\(VisionSceneSet.key(windowID)) mouse=\(mouse) scale=\(scale) auto=\(automatic)") }
+            Button("Open synthetic second scene") {
+                openWindow(id: "sill-session", value: UUID(uuidString: "00000000-0000-4000-8000-000000000029")!)
+            }
+            .onAppear {
+                print("SCENE_SET fixture key=\(VisionSceneSet.key(windowID)) mouse=\(mouse) scale=\(scale) auto=\(automatic)")
+                if !isSecondary, ProcessInfo.processInfo.arguments.contains("-SillSceneSetFixtureTwo") {
+                    openWindow(id: "sill-session", value: UUID(uuidString: "00000000-0000-4000-8000-000000000029")!)
+                }
+            }
         } else if UserDefaults.standard.bool(forKey: "SillNativeGeometry") {
             VisionNativeGeometryFixture()
         } else { content }
@@ -75,17 +83,20 @@ struct VisionSessionView: View {
         guard !isSecondary || windowID != nil else { ready = true; return }
         nativeSessionID = scene.session.persistentIdentifier
         let recovery = VisionSceneSetRecovery.shared
-        #if DEBUG
-        if VisionSceneSetRecovery.fixture { recovery.seedFixture() }
-        #endif
         let stored = recovery.bind(windowID, to: scene)
         if !ready, seed == nil, VisionWorkspace.decode(workspace) == nil, let stored {
             workspace = stored.workspace.encoded
             preferences = stored.preferences
         }
+        #if DEBUG
+        if VisionSceneSetRecovery.fixture, VisionWorkspace.decode(workspace) == nil {
+            workspace = VisionWorkspace(macID: "synthetic-scene-set", width: 1200, height: 800).encoded
+            if isSecondary { preferences = .init(toolbarAutomatic: false, mouseMode: true, textScale: 1.25) }
+        }
+        #endif
         ready = true
         save()
-        if scene.activationState == .foregroundActive { recover(from: scene) }
+        recover(from: scene)
     }
     private func save() {
         guard !isSecondary || windowID != nil, let scene = owningScene.value,
@@ -94,9 +105,10 @@ struct VisionSessionView: View {
                                            workspace: value, preferences: preferences)
     }
     private func recover(from scene: UIWindowScene) {
+        let action = openWindow
         VisionSceneSetRecovery.shared.recover(from: scene) { id in
-            if let id { openWindow(id: "sill-session", value: id) }
-            else { openWindow(id: "sill-main") }
+            if let id { action(id: "sill-session", value: id) }
+            else { action(id: "sill-main") }
         }
     }
 }

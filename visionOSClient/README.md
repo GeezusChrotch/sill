@@ -102,50 +102,51 @@ helpers remain compiled but are not referenced by the active root. They are
 retained to keep this handoff focused and preserve their existing pure checks;
 they do not describe the active UI or establish its behavior.
 
-## Workspace restoration (0.29.0 / 29)
+## Workspace restoration (0.30.0 / 30)
 
 Each scene saves its paired Mac reference, selected Mac window identity, confirmed native size,
-Touch/Mouse, text size, and Auto/Lock preferences in SceneStorage. A credential-free journal also
-records up to four confirmed scene descriptors so a whole-process exit can recover a missing
-secondary window. New scenes are admitted until that cap; existing entries are never evicted.
-visionOS continues to own spatial placement; recreated scenes can recover source, size, and
-preferences, but Sill cannot recreate an arbitrary previous 3D position.
+Touch/Mouse, text size, and Auto/Lock preferences in SceneStorage. A credential-free journal
+tracks up to four current restore members separately from fallback descriptors. Newly observed
+foreground scenes take priority over unbound historical descriptors at the cap. visionOS owns
+spatial placement; recreated scenes recover source, size, and preferences, while Sill cannot
+recreate an arbitrary previous 3D position.
 
-The native owning scene is bound before connection startup, with a one-second fallback to normal
-SceneStorage/manual startup if the native bridge is unavailable. Existing SceneStorage wins;
-newly recreated scenes use the matching journal entry. Only an existing trusted pairing can
-reconnect. No credentials, addresses, connection seeds, raw document titles, or keyboard state
-enter the journal. Restored keyboard forwarding starts off.
+The owning native scene binds before connection startup, with a one-second fallback to normal
+SceneStorage/manual startup when the bridge is unavailable. SceneStorage wins when present;
+recreated scenes use the matching descriptor. Reconnect requires an existing trusted pairing.
+The journal contains no credentials, addresses, connection seeds, raw document titles or keyboard
+state. Keyboard forwarding remains explicitly activated rather than restored.
 
-The app makes one bounded recovery pass after initial native binding. A confirmed whole-set
-discard or disconnection of every bound scene permits one new pass on the next actual activation. Typed secondary windows
-use their original UUID, so native presentation brings forward an existing matching scene rather
-than duplicating it. An archived primary session is activated before a new default scene is
-requested. Inactive/background transitions do not schedule another recovery pass. Disconnection
-stops only that scene's stream and preserves its descriptor. Explicit Disconnect and Forget clear
-restore intent. Late native callbacks cannot save through a replacement scene's binding.
+Closing the whole app can background its scenes without killing the process. Sill tracks native
+foreground/background phases: once the complete observed scene set backgrounds, the next actual
+Sill activation permits one bounded recovery pass. Hidden native scenes remain eligible for
+reactivation even when still bound. Typed scenes use their original UUID to prevent duplicates;
+an archived primary uses its existing native session. Switching away never opens another scene.
+Returning to Sill restores the saved workspace, including after switching between apps. Ordinary
+inactive focus/keyboard transitions cannot arm recovery.
 
-A permanent-discard callback for a subset retires those scenes; a batch covering the entire saved
-scene set preserves logical workspaces and retires obsolete native handles. Launch-time aliases
-handle old batches arriving after the primary has rebound. UIKit does not document force-quit
-callback grouping: separate per-scene force-quit discard callbacks remain indistinguishable from
-individual permanent closure and require headset validation. This candidate does not infer intent
-from background timing.
+Disconnect/permanent-discard callbacks settle for500ms before retiring individual scenes, and a
+latched whole-background observation preserves workspace membership during a quick reopen. Native
+session ownership fences prevent stale callbacks from changing a rebound scene. Explicit Disconnect
+and Forget clear restore intent. A background-only single-window X remains indistinguishable from
+out-of-field-of-view backgrounding; it does not by itself retire a workspace member. Actual headset
+Close Sill, Force Quit and individual-close acceptance remain required.
 
-Window IDs are ephemeral: restoration reconciles the confirmed host catalog using app bundle
-identity and a title digest, waits briefly for a partial catalog, then falls back to a unique
-same-app window or Desktop. Restoration never launches an app. Independent secondary scenes still
-require the spatial-session capable Mac host; primary older-host compatibility is retained.
+Build29 journal membership accumulated stale secondaries. Build30 preserves those descriptors as
+fallbacks but starts new membership from actual foreground scenes. Reopen the two desired windows
+once under build30, then close/reopen the app to establish and check the intended workspace. No
+pairing or per-scene settings are reset by migration.
 
-For an upgrade from build28, reopen the desired second window once under build29 to populate the
-new journal, then quit the whole app with both windows open and relaunch it. A missing build28
-scene cannot be inferred retroactively. Native restoration of the old unnamed primary after adding
-its explicit group ID also requires an upgrade check; a fresh reconnect can seed the journal.
+Ephemeral Mac window IDs are reconciled against the host catalog by bundle identity and a title
+digest, with a bounded wait for partial catalogs and a unique-app/Desktop fallback. Restoration
+never launches an app. Independent secondary scenes require a spatial-session-capable host;
+primary older-host compatibility is retained.
 
-DEBUG-only `-SillSceneSetFixture` uses synthetic descriptors and actual native primary/typed-window
-presentation without constructing any network client. The first run seeds two scenes; subsequent
-runs read the same durable journal through normal recovery. See `Tests/checks/vision-scene-set` for
-pure policy checks. Simulator terminate/relaunch is not physical force-quit acceptance.
+The DEBUG-only `-SillSceneSetFixture -SillSceneSetFixtureTwo` opens two actual synthetic scenes and
+enrols them through production bind/save callbacks, constructing no network client. To check
+recovery, omit `FixtureTwo` on later launches so it cannot mask a failure. The numeric last60-event
+cache `Caches/SillSceneRecovery.json` records lifecycle and membership counts, never identities or
+source content. See `Tests/checks/vision-scene-set/README.md` for event codes and validation limits.
 
 ## Validation and remaining device checks
 
