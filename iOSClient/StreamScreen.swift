@@ -1216,7 +1216,6 @@ struct StreamScreen: View {
             .popover(isPresented: Binding(get: { windowMenu != nil }, set: { if !$0 { closeWindowMenu() } }), arrowEdge: .bottom) {
                 spatialSidebarWindowMenu
             }
-            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
             .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                           group: spatialToolbarHoverGroup))
         }
@@ -1253,7 +1252,6 @@ struct StreamScreen: View {
                 spatialToolbar(sidebar: true, content: .controls)
             }
             .frame(width: BarMetrics.regular.buttonWidth + 16, height: height)
-            .glassBackgroundEffect(in: RoundedRectangle(cornerRadius: 24))
             .modifier(VisionToolbarReveal(automatic: spatialToolbarUsesHover, reduceMotion: reduceMotion,
                                           group: spatialToolbarHoverGroup))
         }
@@ -1294,7 +1292,7 @@ struct StreamScreen: View {
         }
         .hoverEffect(.highlight)
         .accessibilityValue(spatialToolbarAutomatic ? "Automatic" : "Pinned open")
-        .accessibilityHint("Look at either frosted pill to reveal both toolbars. Activate to switch between pinned open and automatic visibility.")
+        .accessibilityHint("Look at either subtle pill to reveal both toolbars. Activate to switch between pinned open and automatic visibility.")
     }
 
     /// An explicit remote click, scroll or key starts control. Merely moving a
@@ -1783,10 +1781,16 @@ private struct TopBar: View {
             VStack(spacing: metrics.buttonSpacing) {
                 Image(systemName: symbol)
                     .font(.system(size: 22))
+                    #if os(visionOS)
+                    .foregroundStyle(.white)
+                    #else
                     .foregroundStyle(open ? Palette.accent : Palette.text)
+                    #endif
+                #if !os(visionOS)
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(open ? Palette.accent : Palette.barLabel)
+                #endif
             }
         }
     }
@@ -1835,11 +1839,21 @@ struct BarButton<Content: View>: View {
         Button(action: action) {
             content()
                 .frame(width: width, height: height)
+                #if os(visionOS)
+                .foregroundStyle(.white)
+                .background(Circle().fill(.black))
+                .overlay(Circle().strokeBorder(.white.opacity(open ? 0.8 : 0), lineWidth: 2))
+                .contentShape(Circle())
+                #else
                 .background(RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(open ? Palette.controlOpen : Palette.control))
+                #endif
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
+        #if os(visionOS)
+        .accessibilityAddTraits(open ? .isSelected : [])
+        #endif
     }
 }
 
@@ -2360,6 +2374,10 @@ private struct WindowThumbnail: View {
         return preview
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            #if os(visionOS)
+            .background(RoundedRectangle(cornerRadius: radius + 5, style: .continuous)
+                .fill(.black).padding(-5))
+            #endif
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
             // The active halo sits under the app badge: the badge's bar-coloured ring then reads as

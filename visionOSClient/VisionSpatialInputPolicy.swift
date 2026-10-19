@@ -193,12 +193,8 @@ struct VisionMouseModeButton: View {
             VStack(spacing: spacing) {
                 Image(systemName: "computermouse")
                     .font(.system(size: iconSize))
-                    .foregroundStyle(client.visionMouseMode ? Palette.accent : Palette.text)
+                    .foregroundStyle(.white)
                     .frame(height: iconBox)
-                Text(client.visionMouseMode ? "Mouse" : "Touch")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(client.visionMouseMode ? Palette.accent : Palette.barLabel)
-                    .lineLimit(1).minimumScaleFactor(0.85)
             }
         }
         .accessibilityValue(client.visionMouseMode ? "On" : "Off, Touch mode")

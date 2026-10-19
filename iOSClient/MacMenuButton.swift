@@ -42,11 +42,17 @@ struct MacMenuButton: View {
             VStack(spacing: spacing) {
                 Image(systemName: Self.symbol)
                     .font(.system(size: iconSize))
+                    #if os(visionOS)
+                    .foregroundStyle(.white)
+                    #else
                     .foregroundStyle(open ? Palette.accent : Palette.text)
+                    #endif
                     .frame(height: iconBox)
+                #if !os(visionOS)
                 Text("Menus")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(open ? Palette.accent : Palette.barLabel)
+                #endif
             }
         }
         .allowsHitTesting(false)

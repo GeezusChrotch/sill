@@ -18,7 +18,7 @@ struct VisionToolbarReveal: ViewModifier {
     }
 }
 
-/// A real, nonzero frosted surface remains visible while Auto is collapsed. It shares
+/// A faint, nonzero surface remains visible while Auto is collapsed. It shares
 /// the bars' hover group and sits inside the future bar footprint, rather than on a rail
 /// between the picture and toolbar. It is a glance target, with no tap action to compete
 /// with the controls above it in the ornament's hit-test hierarchy.
@@ -29,9 +29,9 @@ struct VisionToolbarGlanceTarget: View {
 
     var body: some View {
         Capsule()
-            .fill(.clear)
+            .fill(.black.opacity(0.06))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.08), lineWidth: 1))
             .frame(width: vertical ? 24 : 72, height: vertical ? 72 : 24)
-            .glassBackgroundEffect(in: Capsule())
             .contentShape(.hoverEffect, Capsule())
             .hoverEffect(.highlight, in: group)
             .hoverEffect(in: group) { effect, active, _ in
