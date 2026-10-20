@@ -85,3 +85,27 @@ expect(sameRatio(fitted, CGSize(width: 600, height: 1200)) && fitted.height == 1
        "Changed source fits remembered size with its own ratio")
 expect(VisionWindowSizePolicy.restoredSize(.zero, source: CGSize(width: 600, height: 1200)) == nil,
        "Invalid remembered dimensions cannot resize a scene")
+
+// Insets share the scene's scale on both axes. Fixed point padding would break this
+// invariant when native .uniform resizes a landscape, portrait or unusually thin scene.
+for source in [CGSize(width: 1000, height: 700), CGSize(width: 600, height: 1200),
+               CGSize(width: 3840, height: 2160), CGSize(width: 2160, height: 3840),
+               CGSize(width: 4000, height: 200), CGSize(width: 120, height: 2400)] {
+    let geometry = VisionWindowSizePolicy.geometry(source: source)!
+    let openingInset = VisionWindowSizePolicy.streamInsets(scene: geometry.preferred, source: source)
+    expect(min(openingInset.width, openingInset.height) <= 24.000001, "Opening short-edge buffer exceeds intended 24 points")
+    for fraction: CGFloat in [0, 0.1, 0.5, 0.9, 1] {
+        let scene = CGSize(width: geometry.minimum.width + fraction * (geometry.maximum.width - geometry.minimum.width),
+                           height: geometry.minimum.height + fraction * (geometry.maximum.height - geometry.minimum.height))
+        let rect = VisionWindowSizePolicy.streamRect(scene: scene, source: source)
+        expect(rect.minX > 0 && rect.minY > 0, "Every edge needs a positive native-control buffer")
+        expect(sameRatio(rect.size, source), "Inner picture acquired letterboxing after uniform native resize")
+        expect(abs(rect.midX - scene.width / 2) < 0.000001 && abs(rect.midY - scene.height / 2) < 0.000001,
+               "Border must remain symmetric")
+        expect(rect.width < scene.width && rect.height < scene.height, "Host viewport must exclude border")
+    }
+    let restored = VisionWindowSizePolicy.restoredSize(geometry.preferred, source: source)!
+    expect(restored == geometry.preferred, "Restoration must keep outer scene bounds instead of shrinking to inner viewport")
+}
+expect(VisionWindowSizePolicy.streamInsetFraction(source: nil) == 0.03, "Missing source must use stable fallback independent of live host catalog")
+print("vision-window-size: proportional border, inner viewport, uniform resize and outer restoration checks passed")

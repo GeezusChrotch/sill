@@ -1206,7 +1206,8 @@ struct StreamScreen: View {
             if tour != nil {
                 spatialToolbar(sidebar: false).frame(width: toolbarLength)
             }
-            contentArea(bar: .regular)
+            contentArea(bar: .regular, spatialInset: VisionWindowSizePolicy.streamInsets(scene: size, source: spatialBorderSource))
+                .clipShape(streamShape)
                 .modifier(VisionToolbarPreserve(group: spatialToolbarHoverGroup))
                 .modifier(VisionToolbarReset(group: spatialToolbarHoverGroup,
                                             generation: spatialToolbarHover.generation,
@@ -1224,6 +1225,15 @@ struct StreamScreen: View {
                     .padding(.trailing, 12)
             }
         }
+    }
+
+    /// Window selection dimensions are frozen before the host fits the viewport. A
+    /// host-initiated selection without a snapshot uses a stable fallback fraction;
+    /// live catalog sizes here would feed host fitting back into the border thickness.
+    private var spatialBorderSource: CGSize? {
+        if client.active == .desktop { return client.spatialDesktopVideoSize }
+        guard let snapshot = client.spatialPreferredSourceSize, snapshot.source == client.active else { return nil }
+        return snapshot.size
     }
 
     private func spatialTopToolbar(size: CGSize, length: CGFloat) -> some View {
@@ -1395,9 +1405,11 @@ struct StreamScreen: View {
 
     private var streamShape: RoundedRectangle { RoundedRectangle(cornerRadius: 12, style: .continuous) }
 
-    private func contentArea(bar: BarMetrics) -> some View {
+    private func contentArea(bar: BarMetrics, spatialInset: CGSize = .zero) -> some View {
         ZStack(alignment: .topLeading) {
-            #if !os(visionOS)
+            #if os(visionOS)
+            Color.black.allowsHitTesting(false)
+            #else
             Color.black
             #endif
 
@@ -1434,7 +1446,13 @@ struct StreamScreen: View {
             // The panel itself, inside the padding: the size the host fits the Mac window to.
             .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { panelSize = $0 })
             .tourTarget(.stream)
-            #if !os(visionOS)
+            #if os(visionOS)
+            // Video and UIKit input share this inner rectangle; its geometry report
+            // above sends only the picture viewport to the host. The outer black
+            // margin has no input overlay, highlight or hover-group target.
+            .padding(.horizontal, spatialInset.width)
+            .padding(.vertical, spatialInset.height)
+            #else
             .padding(8)
             #endif
 
