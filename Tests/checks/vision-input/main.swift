@@ -21,7 +21,7 @@ let quarter = VisionInputGeometry.normalized(CGPoint(x: 250, y: 359.375), bounds
 expect(quarter.map { abs($0.x - 0.25) < 0.000001 && abs($0.y - 0.25) < 0.000001 } == true, "quarter location respects letterbox offset")
 
 // The video and UIKit overlay are framed to the same inner rect. Exercise mapping
-// in scene coordinates so native resize corners/black margins never reach the Mac.
+// in scene coordinates so native resize corners/transparent margins never reach the Mac.
 for source in [wide, portrait, CGSize(width: 1000, height: 700)] {
     let geometry = VisionWindowSizePolicy.geometry(source: source)!
     for scene in [geometry.minimum, geometry.preferred, geometry.maximum] {
@@ -29,7 +29,7 @@ for source in [wide, portrait, CGSize(width: 1000, height: 700)] {
         let mapper = ActualInputMapper(bounds: inner, videoSize: source)
         for point in [CGPoint(x: 0, y: 0), CGPoint(x: scene.width - 1, y: scene.height - 1),
                       CGPoint(x: inner.minX / 2, y: inner.midY), CGPoint(x: inner.midX, y: inner.minY / 2)] {
-            expect(mapper.normalized(point, clamped: false) == nil, "Black border must reject remote input")
+            expect(mapper.normalized(point, clamped: false) == nil, "Transparent border must reject remote input")
         }
         for unit in [CGPoint(x: 0.001, y: 0.001), CGPoint(x: 0.999, y: 0.999), CGPoint(x: 0.5, y: 0.5)] {
             let point = CGPoint(x: inner.minX + inner.width * unit.x, y: inner.minY + inner.height * unit.y)

@@ -1408,7 +1408,7 @@ struct StreamScreen: View {
     private func contentArea(bar: BarMetrics, spatialInset: CGSize = .zero) -> some View {
         ZStack(alignment: .topLeading) {
             #if os(visionOS)
-            Color.black.allowsHitTesting(false)
+            Color.clear.allowsHitTesting(false)
             #else
             Color.black
             #endif
@@ -1448,7 +1448,7 @@ struct StreamScreen: View {
             .tourTarget(.stream)
             #if os(visionOS)
             // Video and UIKit input share this inner rectangle; its geometry report
-            // above sends only the picture viewport to the host. The outer black
+            // above sends only the picture viewport to the host. The outer transparent
             // margin has no input overlay, highlight or hover-group target.
             .padding(.horizontal, spatialInset.width)
             .padding(.vertical, spatialInset.height)

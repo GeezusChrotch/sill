@@ -93,7 +93,7 @@ for source in [CGSize(width: 1000, height: 700), CGSize(width: 600, height: 1200
                CGSize(width: 4000, height: 200), CGSize(width: 120, height: 2400)] {
     let geometry = VisionWindowSizePolicy.geometry(source: source)!
     let openingInset = VisionWindowSizePolicy.streamInsets(scene: geometry.preferred, source: source)
-    expect(min(openingInset.width, openingInset.height) <= 24.000001, "Opening short-edge buffer exceeds intended 24 points")
+    expect(min(openingInset.width, openingInset.height) <= 8.000001, "Opening short-edge buffer exceeds intended 8 points")
     for fraction: CGFloat in [0, 0.1, 0.5, 0.9, 1] {
         let scene = CGSize(width: geometry.minimum.width + fraction * (geometry.maximum.width - geometry.minimum.width),
                            height: geometry.minimum.height + fraction * (geometry.maximum.height - geometry.minimum.height))
@@ -107,5 +107,15 @@ for source in [CGSize(width: 1000, height: 700), CGSize(width: 600, height: 1200
     let restored = VisionWindowSizePolicy.restoredSize(geometry.preferred, source: source)!
     expect(restored == geometry.preferred, "Restoration must keep outer scene bounds instead of shrinking to inner viewport")
 }
-expect(VisionWindowSizePolicy.streamInsetFraction(source: nil) == 0.03, "Missing source must use stable fallback independent of live host catalog")
+expect(VisionWindowSizePolicy.streamInsetFraction(source: nil) == 0.03 / 3, "Missing source must use stable fallback independent of live host catalog")
 print("vision-window-size: proportional border, inner viewport, uniform resize and outer restoration checks passed")
+
+// Build 39 retains exactly one third of build 38's buffer, including thin-window caps.
+for source in [CGSize(width: 600, height: 1200), CGSize(width: 3840, height: 2160),
+               CGSize(width: 4000, height: 200)] {
+    let opening = VisionWindowSizePolicy.geometry(source: source)!.preferred
+    let previousFraction = min(CGFloat(0.05), 24 / min(opening.width, opening.height))
+    expect(VisionWindowSizePolicy.streamInsetFraction(source: source) == previousFraction / 3,
+           "Portrait, landscape and capped buffers must be exactly one third of build 38")
+}
+print("vision-window-size: exact one-third portrait, landscape, capped and fallback buffer checks passed")

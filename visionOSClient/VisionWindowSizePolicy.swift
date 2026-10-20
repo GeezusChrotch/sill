@@ -15,13 +15,13 @@ enum VisionWindowSizePolicy {
     // landscape scene or a 2880-point-tall portrait scene without forcing either at launch.
     static let streamMaximum = CGSize(width: 3840, height: 2880)
 
-    /// A 24-point buffer on the opening scene's shorter axis, capped for unusually thin
+    /// An 8-point buffer on the opening scene's shorter axis, capped for unusually thin
     /// windows. The fraction stays tied to frozen selection/desktop source dimensions,
     /// never the host's viewport-fitted window. Both axes use this same fraction so the
     /// inner picture keeps the outer scene's aspect throughout native uniform resizing.
     static func streamInsetFraction(source: CGSize?) -> CGFloat {
-        guard let source, let opening = geometry(source: source)?.preferred else { return 0.03 }
-        return min(0.05, 24 / min(opening.width, opening.height))
+        guard let source, let opening = geometry(source: source)?.preferred else { return 0.03 / 3 }
+        return min(0.05, 24 / min(opening.width, opening.height)) / 3
     }
 
     static func streamInsets(scene: CGSize, source: CGSize?) -> CGSize {
